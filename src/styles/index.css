@@ -1,0 +1,104 @@
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/src/assets/fonts/AtkinsonHyperlegible-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/src/assets/fonts/AtkinsonHyperlegible-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/src/assets/fonts/AtkinsonHyperlegible-Italic.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/src/assets/fonts/AtkinsonHyperlegible-BoldItalic.woff2') format('woff2');
+}
+
+:root {
+  /* Observer Palette CSS Variables */
+  --bg-ivory: #F5F2E9;
+  --bg-ivory-subtle: #EFECE2;
+  --panel-white: #FFFFFF;
+  --primary-sage: #496B5A;
+  --primary-sage-hover: #3D594B;
+  --text-ink: #293B32;
+  --text-ink-muted: #4A6356;
+  --text-ink-subtle: #6E887B;
+  --highlight-pale: #DCE5D8;
+  --highlight-pale-hover: #CFDCC9;
+  --accent-clay: #B87559;
+  --accent-clay-pale: #F2E4DE;
+  --border-calm: rgba(41, 59, 50, 0.12);
+}
+
+[data-theme="high-contrast"] {
+  --bg-ivory: #FAF8F3;
+  --bg-ivory-subtle: #EDE9DE;
+  --panel-white: #FFFFFF;
+  --primary-sage: #2C4638;
+  --primary-sage-hover: #1F3328;
+  --text-ink: #14201A;
+  --text-ink-muted: #24352C;
+  --text-ink-subtle: #395245;
+  --highlight-pale: #C5D8BF;
+  --highlight-pale-hover: #B2CCA9;
+  --accent-clay: #994E32;
+  --accent-clay-pale: #F3DDD3;
+  --border-calm: #14201A;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--bg-ivory);
+    color: var(--text-ink);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Accessible, prominent focus indicators */
+  *:focus-visible {
+    outline: 2px solid var(--primary-sage);
+    outline-offset: 2px;
+  }
+}
+
+/* Reduced motion honoring */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

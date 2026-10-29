@@ -1,0 +1,115 @@
+{
+  "app": {
+    "title": "Observer",
+    "subtitle": "A privacy-preserving companion for calm focus and gentle support",
+    "statusPill": {
+      "cameraOn": "Camera on",
+      "cameraOff": "Camera off",
+      "cameraStarting": "Starting camera...",
+      "cameraBlocked": "Camera blocked by system permissions",
+      "cameraUnplugged": "No camera detected",
+      "calibrating": "Calibrating...",
+      "demoMode": "Demo mode - camera not used"
+    },
+    "disclaimer": "Observer provides local behavioral estimates, not a clinical diagnosis or medical evaluation. All processing happens 100% on this computer."
+  },
+  "states": {
+    "RELAXED": "Settled & Relaxed",
+    "FOCUSED": "Engaged in Flow",
+    "PARALYSIS_LIKELY": "Might Be Stuck",
+    "OVERLOAD_LIKELY": "Feeling a Lot",
+    "UNKNOWN": "Checking in..."
+  },
+  "nav": {
+    "home": "Overview",
+    "calibration": "Calibration",
+    "interventions": "Offers",
+    "demo": "Demo Mode",
+    "settings": "Settings",
+    "privacy": "Privacy & Ethics"
+  },
+  "welcome": {
+    "heading": "Welcome to Observer",
+    "subheading": "A calm, local companion designed to notice when you're stuck without judgment.",
+    "privacyHeading": "How your privacy is protected",
+    "privacyPoints": [
+      "100% Local: No video frames, images, or audio are ever saved or transmitted.",
+      "Zero Telemetry: No analytics, tracking, or network calls of any kind.",
+      "No Window Spying: Observer never reads window titles, process names, or keystrokes.",
+      "Full Control: You can pause the camera anytime or delete all stored calibration data instantly."
+    ],
+    "consentPrompt": "Please review and configure what local signals Observer may observe:",
+    "toggleWebcam": "Facial cues (blink rate, gaze dispersion, tension proxies)",
+    "toggleIdle": "Idle keyboard/mouse timing (seconds without activity)",
+    "toggleWindowSwitches": "Window switch count (frequency of switching apps)",
+    "understandCheckbox": "I understand that Observer runs locally, never saves images, and offers estimates rather than diagnoses.",
+    "getStartedButton": "Get Started"
+  },
+  "calibration": {
+    "heading": "Personal Calibration",
+    "subheading": "Neurodivergent focus patterns are unique. Calibration teaches Observer your personal baseline.",
+    "step1Title": "Step 1: Relaxed Baseline",
+    "step1Desc": "Take a breath, look naturally at your screen as if casually watching a video.",
+    "step2Title": "Step 2: Normal Working Focus",
+    "step2Desc": "Look at the screen as you normally do when reading or typing.",
+    "startButton": "Start 2-Minute Calibration",
+    "cancelButton": "Cancel Calibration",
+    "skipButton": "Skip for Now",
+    "faceDetected": "Face detected in frame",
+    "noFaceDetected": "Looking for face... please center your camera",
+    "completeTitle": "Calibration Complete",
+    "completeDesc": "Your baseline features have been saved locally. You can re-calibrate anytime."
+  },
+  "home": {
+    "currentStateLabel": "Current State",
+    "confidenceLabel": "Confidence Estimate",
+    "whyTitle": "Why Observer thinks so",
+    "whyDesc": "Top observed cues contributing to this estimate:",
+    "pauseCamera": "Pause Camera",
+    "resumeCamera": "Resume Camera",
+    "activeIntervention": "Gentle Offer Waiting",
+    "noIntervention": "No interventions right now. Focus or rest at your own pace."
+  },
+  "intervention": {
+    "heading": "Gentle Check-in",
+    "feedbackPrompt": "Was this helpful?",
+    "helped": "Helped",
+    "notNow": "Not now",
+    "wrongGuess": "That wasn't right"
+  },
+  "settings": {
+    "heading": "Preferences & Data",
+    "sensitivityLabel": "Detection Sensitivity",
+    "sensitivityDesc": "Adjust how readily gentle check-ins are offered.",
+    "tierLabel": "Intervention Level",
+    "tierOptions": {
+      "0": "Off (Monitor only)",
+      "1": "Ambient cue only",
+      "2": "Gentle offers",
+      "3": "Offers with micro-steps"
+    },
+    "quietHoursLabel": "Quiet Hours",
+    "quietHoursDesc": "Silence gentle offers during specific times of day.",
+    "cooldownLabel": "Cooldown Between Offers",
+    "highContrast": "High-Contrast Theme",
+    "reduceMotion": "Reduce Motion",
+    "startWithWindows": "Start Observer with Windows",
+    "dangerZone": "Data Management",
+    "resetCalibration": "Reset Calibration Baseline",
+    "deleteAllData": "Delete All Stored Data"
+  },
+  "demo": {
+    "heading": "Judge & Evaluator Demo Mode",
+    "subheading": "Inspect the complete state detection timeline and interventions without needing a live webcam.",
+    "startButton": "Restart Demo Scenario",
+    "stopButton": "Stop Demo",
+    "timelineHeading": "Synthetic Timeline Progression",
+    "stages": [
+      { "time": "0s - 6s", "title": "Relaxed State", "desc": "Casual video watching, natural blink cadence, relaxed brow." },
+      { "time": "7s - 14s", "title": "Focused Work", "desc": "Steady typing input, engaged gaze distribution, low tension." },
+      { "time": "15s - 21s", "title": "Task Paralysis Emerges", "desc": "Prolonged gaze freeze on cursor, brow furrow, zero typing." },
+      { "time": "22s - 24s", "title": "Gentle Intervention", "desc": "Tier 2 offer: 'That looks stuck. Want a tiny first step?'" },
+      { "time": "25s - 32s", "title": "Recovery & Settled", "desc": "User breathes, shifts gaze, returns to relaxed baseline." }
+    ]
+  }
+}

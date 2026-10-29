@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Observer uses your camera locally on-device to track attention, gaze, and facial tension for gentle executive function support. Video frames never leave your device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Observer uses your microphone locally for hands-free voice control and task sequencing. Audio is never stored or transmitted.</string>
+</dict>
+</plist>

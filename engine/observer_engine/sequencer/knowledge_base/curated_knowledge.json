@@ -1,0 +1,110 @@
+[
+  {
+    "doc_id": "INIT-001",
+    "title": "Activation & The 2-Minute Physical Threshold",
+    "source_name": "ADDitude Magazine - Executive Function Strategies",
+    "url": "https://www.additudemag.com/how-to-start-a-task-adhd-activation/",
+    "author_or_org": "Ellen Littman, Ph.D. / ADDitude",
+    "publication_date": "2023-04-12",
+    "category": "task_initiation",
+    "topic": "Micro-Step Friction Reduction",
+    "content": "For neurodivergent adults and students with executive dysfunction, the neurological cost of task initiation ('activation') is vastly higher than continuing a task once engaged. Initiation failure is not a motivation failure; it is an executive signaling delay. The proven strategy is shrinking the first action below the threshold of neurological resistance: do not aim to write a page or study for an hour. Aim solely to open the document, write a working title, or physically place hands on the keyboard for 60 seconds. Once the physical posture of starting is adopted, dopamine-mediated engagement often follows naturally.",
+    "limitations": "Works best for initiation freeze; does not solve sustained endurance without periodic check-ins."
+  },
+  {
+    "doc_id": "INIT-002",
+    "title": "Decoupling Deciding from Doing",
+    "source_name": "Job Accommodation Network (JAN) - Executive Functioning Accommodations",
+    "url": "https://askjan.org/disabilities/Executive-Functioning-Deficits.cfm",
+    "author_or_org": "Job Accommodation Network (U.S. Dept of Labor)",
+    "publication_date": "2022-11-01",
+    "category": "task_initiation",
+    "topic": "Decision Paralysis & Setup Friction",
+    "content": "When a task requires both deciding what to do and physically executing it, executive overload compounds. Reduce initiation friction by separating the decision phase from the execution phase. Prepare the work environment or open the target application the night before or during a low-stakes moment. When returning to the task, the user only has to execute the predetermined step rather than confront a blank slate.",
+    "limitations": "Requires pre-commitment; if the context changes, the prepared setup may need adjustment."
+  },
+  {
+    "doc_id": "DECOMP-001",
+    "title": "Atomic Task Decomposition & Progressive Granularity",
+    "source_name": "CHADD - Children and Adults with Attention-Deficit/Hyperactivity Disorder",
+    "url": "https://chadd.org/for-adults/organizing-and-time-management/",
+    "author_or_org": "CHADD National Resource Center",
+    "publication_date": "2023-01-18",
+    "category": "task_decomposition",
+    "topic": "Granular Step Breakdown",
+    "content": "Broad task titles like 'Write Term Paper' or 'Debug Authentication' trigger avoidance because the brain cannot compute an immediate motor sequence. Effective decomposition reduces the task to an atomic physical movement: 'Open VS Code', 'Read assignment rubric section 1', or 'Write one ugly bullet point'. If a proposed step still triggers hesitation, it is still too large. Subdivide the step further until resistance reaches zero.",
+    "limitations": "Over-decomposition can create excessive step lists. The system should present only ONE step at a time rather than an overwhelming 20-item checklist."
+  },
+  {
+    "doc_id": "OVERLOAD-001",
+    "title": "Choice Reduction in Acute Cognitive Overload",
+    "source_name": "Autistic Self Advocacy Network (ASAN) - Navigating Overwhelm",
+    "url": "https://autisticadvocacy.org/resources/executive-function/",
+    "author_or_org": "Autistic Self Advocacy Network",
+    "publication_date": "2021-08-15",
+    "category": "cognitive_overload",
+    "topic": "Choice Overload & Sensory Calming",
+    "content": "In states of acute cognitive overload, working memory collapse impairs the ability to evaluate competing options. Presenting multiple choices compounds distress. The optimal intervention removes choices: offer exactly one viable action or an explicit rest option. Defer all non-urgent peripheral tasks, dim lighting, and eliminate auditory distractions.",
+    "limitations": "Does not replace long-term workload management; acts as acute relief during freeze states."
+  },
+  {
+    "doc_id": "ENERGY-001",
+    "title": "Capacity-Responsive Pacing & Spoon Theory in Academics",
+    "source_name": "University of Michigan Student Accessibility and Accommodation Services",
+    "url": "https://ssd.umich.edu/article/energy-management-and-pacing",
+    "author_or_org": "University of Michigan SSD",
+    "publication_date": "2023-09-10",
+    "category": "energy_aware_planning",
+    "topic": "Energy Pacing & Variable Capacity",
+    "content": "Neurodivergent capacity fluctuates non-linearly across days and hours based on sensory load, sleep, and emotional regulation. Rigid time-blocking often fails because it assumes constant capacity. Pacing models classify tasks by demand: low-energy tasks (skimming headlines, organizing folders, formatting references) should be scheduled during low-spoons periods, reserving high-synthesis work for high-capacity windows without self-blame.",
+    "limitations": "Deadlines may force work during suboptimal energy; in such cases, micro-steps with frequent breathers are required."
+  },
+  {
+    "doc_id": "BODY-001",
+    "title": "Virtual Body Doubling & Parallel Accountability",
+    "source_name": "ADHD Foundation Neurodiversity Charity",
+    "url": "https://www.adhdfoundation.org.uk/resources/body-doubling/",
+    "author_or_org": "ADHD Foundation UK",
+    "publication_date": "2022-06-30",
+    "category": "body_doubling",
+    "topic": "Parallel Presence & Non-Judgemental Support",
+    "content": "Body doubling is the practice of working alongside another individual—physically, virtually, or via an interactive agent—to ground attention. The presence of a calm, non-pressuring entity anchors the nervous system, counteracting drift and isolation. Crucially, the double must remain non-judgmental and non-surveilling; evaluative pressure increases autonomic arousal and induces freeze.",
+    "limitations": "Some individuals experience demand avoidance if the body double is perceived as supervisory or demanding."
+  },
+  {
+    "doc_id": "REST-001",
+    "title": "Sensory Decompression & Guilt-Free Transitions to Rest",
+    "source_name": "National Autistic Society - Transitions and Sensory Rest",
+    "url": "https://www.autism.org.uk/advice-and-guidance/topics/sensory-differences",
+    "author_or_org": "National Autistic Society (UK)",
+    "publication_date": "2022-10-14",
+    "category": "rest_and_transitions",
+    "topic": "Guilt-Free Rest & Neural Recovery",
+    "content": "Rest is not a reward earned by productivity; it is a biological requirement for executive function recovery. Neurodivergent individuals frequently experience 'limbo freeze'—unable to work, yet unable to relax because guilt keeps the nervous system hyper-vigilant. Giving explicit permission to transition into structured, low-stimulation rest (eyes closed, dim lighting, soothing tactile input) allows true recovery so cognitive capacity can reset.",
+    "limitations": "Rest must be truly restorative; doom-scrolling often increases sensory fatigue without replenishing dopamine."
+  },
+  {
+    "doc_id": "ACAD-001",
+    "title": "Overcoming the Blank Page in Academic Writing",
+    "source_name": "Purdue Online Writing Lab (OWL) - Overcoming Writer's Block",
+    "url": "https://owl.purdue.edu/owl/general_writing/the_writing_process/writers_block.html",
+    "author_or_org": "Purdue University Writing Lab",
+    "publication_date": "2023-02-20",
+    "category": "academic_workflows",
+    "topic": "Lowering Standards for Draft Zero",
+    "content": "Perfectionism is a primary cause of task paralysis in writing and coding assignments. When the standard for the first sentence is publication-quality prose, the executive system locks up. The antidote is 'Draft Zero' or 'Junk Draft': write an intentionally flawed, placeholder sentence (e.g. 'This paper is about why X causes Y, details later'). Moving words onto the screen breaks the perfectionism bottleneck, transitioning the task from creation to editing, which requires far less cognitive activation.",
+    "limitations": "Requires accepting imperfect drafts; perfectionist anxiety may resist writing placeholder text initially."
+  },
+  {
+    "doc_id": "CODE-001",
+    "title": "Micro-Debugging: The First Failing Assertion",
+    "source_name": "Software Engineering Institute - Cognitive Load in Debugging",
+    "url": "https://insights.sei.cmu.edu/blog/reducing-cognitive-load-in-software-development/",
+    "author_or_org": "Carnegie Mellon Software Engineering Institute",
+    "publication_date": "2022-03-10",
+    "category": "academic_workflows",
+    "topic": "Programming Freeze & Isolation",
+    "content": "Complex codebase bugs create rapid cognitive overload when developers try to simulate the entire execution graph in working memory. The antidote to debugging freeze is isolating the narrowest observable failure: do not solve the whole bug. Simply run the test suite to observe the specific error message, print one variable, or write a single failing test assertion. Solving a 1-line check creates dopamine feedback and anchors attention.",
+    "limitations": "Heavier architectural bugs eventually require deeper modeling once initiation is established."
+  }
+]
