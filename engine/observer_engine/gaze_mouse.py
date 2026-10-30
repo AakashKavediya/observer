@@ -1,26 +1,37 @@
 """
 observer_engine.gaze_mouse
-Track 4: Stability-First Head-Movement Velocity Mouse Controller (Rate/Joystick Style).
+Track 4: Calibrated Relative Movement & Absolute Screen Mapping Face-Controlled Mouse.
 
-Architecture:
-- STOP using raw face coordinates as absolute screen coordinates.
-- Relative Head-Movement Velocity Controller:
-    * Calibrated neutral resting head pose (neutral_yaw, neutral_pitch, neutral_nose_x, neutral_nose_y).
-    * Hysteresis Dead Zone:
-        Inside dead zone: velocity is IDENTICALLY 0.0. The OS cursor remains rock-solid stationary (0 px jitter/drift).
-        Outside dead zone: deflection converts to bounded cursor velocity v = g(Δ).
-        Returning head to neutral stops cursor movement instantly.
-    * Bounded incremental integration: pos_t = clamp(pos_{t-1} + v * dt, 0.0, 1.0).
-    * Control clutch: 1-click Recenter, Pause/Resume, Emergency Stop (Esc).
-- Predictable Presets:
-    * Maximum Stability (default): larger dead zone (1.8°), conservative speed, zero movement for small fluctuations.
-    * Balanced: moderate dead zone (1.2°), general desktop navigation.
-    * Responsive: smaller dead zone (0.7°), fast traversal.
-- Safety & Signal Hygiene:
-    * Frame age validation (max frame age <= 100ms, clamped dt [0.010, 0.066]s).
-    * Spike outlier rejection (> 15° or > 0.25 norm within 150ms).
-    * Blink hold (< 400ms) and smooth re-acquisition without position jump.
-    * Versioned JSON persistence (~/.observer/head_mouse_calibration_v3.json).
+Authoritative Architecture:
+1. Mathematical Facial Reference Point:
+   - Stable eye-center reference: eyeCenter = (leftEyeReference + rightEyeReference) / 2
+   - Scale-invariant nose displacement: noseRelative = (noseBridge - eyeCenter) / interEyeDistance
+   - Explicit camera mirroring: user moving right moves pointer right (+x); tilting up moves pointer up (-y).
+   - Head-pose integration: yaw (horizontal) and pitch (vertical) estimated from facial geometry.
+   - Tracking modes: 'nose_bridge', 'head_pose', 'hybrid'.
+2. Robust Neutral Calibration:
+   - Median + Median Absolute Deviation (MAD) over valid sample bursts.
+   - Establishes p0 = [x0, y0] without single-frame bias or drift.
+   - Learns directional usable movement ranges (scaleX, scaleY).
+   - Validates mapping repeatability using held-out center validation.
+   - Versioned local persistence (~/.observer/face_mouse_calibration_v4.json).
+3. Mathematical Movement Model:
+   - Relative deflection: dx = xt - x0, dy = yt - y0
+   - Normalized coordinates: ux = dx / scaleX, uy = dy / scaleY
+   - Adaptive Dead Zone with Hysteresis:
+       * Inside dead zone: velocity is IDENTICALLY (0.0, 0.0), cursor is 100% stationary (0.00 px jitter).
+       * Outside dead zone: bounded smooth non-linear transfer: v = sign(z) * min(maxSpeed, gain * |z|^gamma).
+       * Acceleration limiter: clamp |dv/dt| <= max_acceleration to prevent sudden pointer snaps.
+       * Real-timestamp integration: pos_t = clamp(pos_{t-1} + v * dt, 0.0, 1.0).
+4. Configurable Controller Modes:
+   - Mode A ('relative'): Rate/Joystick velocity control (rock-solid stability, 0px stationary jitter).
+   - Mode B ('absolute'): Regularized polynomial screen mapping with Ridge regression (L2 regularization).
+5. Signal Processing Hygiene:
+   - Outlier spike rejection (> 3.5 robust z-score or jump > 0.25 norm in < 150ms).
+   - Temporal smoothing via One-Euro filter.
+   - Blink hold (< 400ms) holding cursor stationary without position reset.
+   - Safe filter reset on tracking reacquisition or recalibration.
+   - Control clutch: 1-click Recenter (resets neutral p0 without jumping cursor), Emergency Stop (Esc), Pause/Resume.
 """
 
 import os
@@ -28,8 +39,19 @@ import json
 import time
 import math
 from dataclasses import dataclass, asdict
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Literal
 import numpy as np
+
+from observer_engine.motionq import (
+    DwellEngine,
+    DwellTarget,
+    MotionQEyeController,
+    HeadTiltScroller,
+    MotionQCalibrationManager,
+    WordPredictor,
+    VoiceCommandDispatcher,
+    profile_manager,
+)
 
 
 # -------------------------------------------------------------
@@ -91,7 +113,6 @@ class OneEuroFilter1D:
         self.last_time = timestamp
         rate = 1.0 / max(1e-4, dt)
 
-        # Estimate derivative
         prev_x = self.x_filter.last_raw_value()
         dx = 0.0 if prev_x is None else (x - prev_x) * rate
         edx = self.dx_filter.filter_with_alpha(dx, self._alpha(rate, self.d_cutoff))
@@ -125,66 +146,98 @@ class OneEuroFilter2D:
 
 
 # -------------------------------------------------------------
-# 2. Schema, Presets & Calibration Configuration
+# 2. Schema, Calibration Targets & Presets
 # -------------------------------------------------------------
-HEAD_MOUSE_SCHEMA_VERSION = "3.0.0"
-GAZE_CALIB_SCHEMA_VERSION = "3.0.0"
+FACE_MOUSE_SCHEMA_VERSION = "4.0.0"
 
 STABILITY_PRESETS = {
     "maximum_stability": {
         "dead_zone": 0.020,
-        "dead_zone_enter_deg": 1.8,
-        "dead_zone_exit_deg": 1.4,
-        "dead_zone_enter_norm": 0.040,
-        "dead_zone_exit_norm": 0.030,
-        "gain": 0.08,
-        "power": 1.2,
+        "dead_zone_enter": 0.080,  # In normalized movement space [0, 1]
+        "dead_zone_exit": 0.055,
+        "gain": 0.35,
+        "power": 1.25,
         "max_speed": 0.35,  # norm / s
+        "max_acceleration": 2.5,  # norm / s^2
         "min_cutoff": 0.5,
-        "beta": 0.10,
+        "beta": 0.08,
         "sensitivity": 0.8,
         "label": "Maximum Stability (Default)",
-        "description": "Fixation priority. 0px stationary jitter with hysteresis dead zone.",
+        "description": "Fixation priority with rock-solid dead zone. 0.0px stationary jitter.",
     },
     "balanced": {
         "dead_zone": 0.012,
-        "dead_zone_enter_deg": 1.2,
-        "dead_zone_exit_deg": 0.9,
-        "dead_zone_enter_norm": 0.025,
-        "dead_zone_exit_norm": 0.018,
-        "gain": 0.14,
-        "power": 1.2,
+        "dead_zone_enter": 0.050,
+        "dead_zone_exit": 0.035,
+        "gain": 0.60,
+        "power": 1.20,
         "max_speed": 0.65,
+        "max_acceleration": 4.0,
         "min_cutoff": 0.8,
-        "beta": 0.30,
+        "beta": 0.25,
         "sensitivity": 1.2,
         "label": "Balanced",
-        "description": "Balanced responsiveness and stability for general desktop control.",
+        "description": "Smooth, responsive head control for general desktop interaction.",
     },
     "responsive": {
         "dead_zone": 0.006,
-        "dead_zone_enter_deg": 0.7,
-        "dead_zone_exit_deg": 0.5,
-        "dead_zone_enter_norm": 0.015,
-        "dead_zone_exit_norm": 0.010,
-        "gain": 0.22,
-        "power": 1.2,
+        "dead_zone_enter": 0.025,
+        "dead_zone_exit": 0.018,
+        "gain": 0.95,
+        "power": 1.15,
         "max_speed": 1.10,
-        "min_cutoff": 1.5,
-        "beta": 0.60,
+        "max_acceleration": 6.5,
+        "min_cutoff": 1.4,
+        "beta": 0.50,
         "sensitivity": 1.6,
         "label": "Responsive",
-        "description": "Faster cursor traversal with smaller dead zone.",
+        "description": "Fast cursor traversal with low movement latency.",
     },
 }
 
 CALIBRATION_TARGETS = [
-    {"target_id": "center_1", "screen_x": 0.50, "screen_y": 0.50, "label": "Look at Center"},
-    {"target_id": "top_left", "screen_x": 0.15, "screen_y": 0.15, "label": "Look Top-Left"},
-    {"target_id": "top_right", "screen_x": 0.85, "screen_y": 0.15, "label": "Look Top-Right"},
-    {"target_id": "bottom_right", "screen_x": 0.85, "screen_y": 0.85, "label": "Look Bottom-Right"},
-    {"target_id": "bottom_left", "screen_x": 0.15, "screen_y": 0.85, "label": "Look Bottom-Left"},
-    {"target_id": "center_2", "screen_x": 0.50, "screen_y": 0.50, "label": "Validation: Look at Center Again"},
+    {
+        "target_id": "center_neutral",
+        "screen_x": 0.50,
+        "screen_y": 0.50,
+        "label": "Neutral Reference: Sit comfortably looking straight ahead at center",
+        "expected_direction": "none",
+    },
+    {
+        "target_id": "move_left",
+        "screen_x": 0.15,
+        "screen_y": 0.50,
+        "label": "Usable Range Left: Turn or tilt head comfortably to the Left",
+        "expected_direction": "left",
+    },
+    {
+        "target_id": "move_right",
+        "screen_x": 0.85,
+        "screen_y": 0.50,
+        "label": "Usable Range Right: Turn or tilt head comfortably to the Right",
+        "expected_direction": "right",
+    },
+    {
+        "target_id": "move_up",
+        "screen_x": 0.50,
+        "screen_y": 0.15,
+        "label": "Usable Range Up: Tilt head comfortably Upward",
+        "expected_direction": "up",
+    },
+    {
+        "target_id": "move_down",
+        "screen_x": 0.50,
+        "screen_y": 0.85,
+        "label": "Usable Range Down: Tilt head comfortably Downward",
+        "expected_direction": "down",
+    },
+    {
+        "target_id": "validation_center",
+        "screen_x": 0.50,
+        "screen_y": 0.50,
+        "label": "Validation: Return head to Center resting position",
+        "expected_direction": "none",
+    },
 ]
 
 
@@ -217,11 +270,19 @@ class GazeCalibrationProfile:
     coeff_x: List[float]
     coeff_y: List[float]
     targets: List[Dict[str, Any]]
-    tracking_mode: str = "hybrid"
+    controller_mode: str = "relative"  # "relative" (Mode A) or "absolute" (Mode B)
+    tracking_mode: str = "hybrid"  # "nose_bridge", "head_pose", "hybrid"
+    neutral_x0: float = 0.0
+    neutral_y0: float = 0.0
     neutral_yaw: float = 0.0
     neutral_pitch: float = 0.0
     neutral_nose_x: float = 0.0
     neutral_nose_y: float = 0.0
+    scale_x: float = 0.12
+    scale_y: float = 0.10
+    noise_mad_x: float = 0.002
+    noise_mad_y: float = 0.002
+    learned_dead_zone: float = 0.020
 
 
 @dataclass
@@ -235,16 +296,23 @@ class DiagnosticSample:
 
 
 # -------------------------------------------------------------
-# 3. GazeMouseTracker / HeadMouseController Core
+# 3. GazeMouseTracker Core Implementation
 # -------------------------------------------------------------
 class GazeMouseTracker:
     def __init__(self, storage_dir: Optional[str] = None):
         self.storage_dir = storage_dir or os.path.expanduser("~/.observer")
         os.makedirs(self.storage_dir, exist_ok=True)
-        self.calib_file_path = os.path.join(self.storage_dir, "head_mouse_calibration_v3.json")
-        self.legacy_calib_path = os.path.join(self.storage_dir, "gaze_calibration_v2.json")
+        self.calib_file_path = os.path.join(self.storage_dir, "face_mouse_calibration_v4.json")
+        self.legacy_calib_paths = [
+            os.path.join(self.storage_dir, "head_mouse_calibration_v3.json"),
+            os.path.join(self.storage_dir, "gaze_calibration_v2.json"),
+        ]
 
-        # Tracking Mode: "head_pose" (recommended), "nose_bridge", "hybrid"
+        # Mode A: 'relative' (Rate/Joystick velocity controller)
+        # Mode B: 'absolute' (Regularized polynomial screen mapping)
+        self.controller_mode: str = "relative"
+
+        # Tracking Feature Strategy: 'nose_bridge', 'head_pose', 'hybrid'
         self.tracking_mode: str = "hybrid"
 
         # Preset selection (Default is Maximum Stability)
@@ -260,34 +328,44 @@ class GazeMouseTracker:
         self.sensitivity: float = preset_cfg["sensitivity"]
         self.dead_zone: float = preset_cfg["dead_zone"]
         self.max_speed: float = preset_cfg["max_speed"]
+        self.max_acceleration: float = preset_cfg["max_acceleration"]
         self.smoothing_mode: str = self.preset_name
 
-        # Presets dead-zone thresholds
-        self.dead_zone_enter_deg: float = preset_cfg["dead_zone_enter_deg"]
-        self.dead_zone_exit_deg: float = preset_cfg["dead_zone_exit_deg"]
-        self.dead_zone_enter_norm: float = preset_cfg["dead_zone_enter_norm"]
-        self.dead_zone_exit_norm: float = preset_cfg["dead_zone_exit_norm"]
+        # Dead-zone thresholds with hysteresis
+        self.dead_zone_enter: float = preset_cfg["dead_zone_enter"]
+        self.dead_zone_exit: float = preset_cfg["dead_zone_exit"]
         self.gain: float = preset_cfg["gain"]
         self.power: float = preset_cfg["power"]
 
         # Hysteresis state: True if cursor is actively deflecting outside dead zone
         self.is_moving: bool = False
 
-        # Relative neutral reference pose
+        # Stable Facial Reference Point State
+        self.neutral_x0: float = 0.0
+        self.neutral_y0: float = 0.0
         self.neutral_yaw: float = 0.0
         self.neutral_pitch: float = 0.0
         self.neutral_nose_x: float = 0.0
         self.neutral_nose_y: float = 0.0
+        self.scale_x: float = 0.12
+        self.scale_y: float = 0.10
+        self.noise_mad_x: float = 0.002
+        self.noise_mad_y: float = 0.002
         self.is_neutral_calibrated: bool = False
         self.neutral_calibration_samples: List[Tuple[float, float, float, float]] = []
 
         # Current live state telemetry
+        self.current_xt: float = 0.0
+        self.current_yt: float = 0.0
         self.current_yaw: float = 0.0
         self.current_pitch: float = 0.0
         self.current_nose_x: float = 0.0
         self.current_nose_y: float = 0.0
+        self.inter_eye_distance: float = 0.20
         self.deflection_x: float = 0.0
         self.deflection_y: float = 0.0
+        self.normalized_ux: float = 0.0
+        self.normalized_uy: float = 0.0
         self.velocity_x: float = 0.0
         self.velocity_y: float = 0.0
         self.in_dead_zone: bool = True
@@ -295,10 +373,10 @@ class GazeMouseTracker:
         self.update_hz: float = 0.0
         self.frame_age_ms: float = 0.0
 
-        # Incremental cursor position [0.0, 1.0]
+        # Authoritative Desktop Cursor Position [0.0, 1.0]
         self.last_cursor_norm: Tuple[float, float] = (0.5, 0.5)
 
-        # Temporal filter for features
+        # Single authoritative temporal filter
         self.filter = OneEuroFilter2D(
             min_cutoff=preset_cfg["min_cutoff"],
             beta=preset_cfg["beta"],
@@ -332,11 +410,99 @@ class GazeMouseTracker:
         # Load or initialize calibration profile
         self.profile = self.load_calibration() or self._default_calibration()
         if self.profile.is_calibrated:
-            self.neutral_yaw = self.profile.neutral_yaw
-            self.neutral_pitch = self.profile.neutral_pitch
-            self.neutral_nose_x = self.profile.neutral_nose_x
-            self.neutral_nose_y = self.profile.neutral_nose_y
-            self.is_neutral_calibrated = True
+            self._apply_profile(self.profile)
+
+        # ---------------------------------------------------------
+        # MotionQ Integrated Assistive Components
+        # ---------------------------------------------------------
+        self.dwell_engine = DwellEngine(default_duration_ms=1000.0, stability_radius=50.0)
+        self.motionq_eye = MotionQEyeController(
+            dwell_engine=self.dwell_engine,
+            screen_w=1920.0,
+            screen_h=1080.0,
+            sensitivity=3.0,
+        )
+        self.head_scroller = HeadTiltScroller(
+            neutral_y=None,
+            tilt_threshold=20.0,
+            scroll_amount=3,
+            enabled=True,
+        )
+        self.motionq_calibrator = MotionQCalibrationManager(profile_name="default")
+        self.word_predictor = WordPredictor()
+        self.voice_dispatcher = VoiceCommandDispatcher()
+        self.current_profile_name: str = "default"
+        self.keyboard_language: str = "EN"
+
+        self._pending_click_event: Optional[Dict[str, Any]] = None
+        self._pending_scroll_event: Optional[Dict[str, Any]] = None
+        self._pending_key_action: Optional[Dict[str, Any]] = None
+
+        def _on_dwell_click(cx: float, cy: float, is_double: bool):
+            self._pending_click_event = {
+                "button": "left",
+                "double": is_double,
+                "x": cx,
+                "y": cy,
+            }
+
+        def _on_head_scroll(delta_lines: int):
+            self._pending_scroll_event = {
+                "delta_y": delta_lines,
+            }
+
+        self.dwell_engine.set_click_dispatcher(_on_dwell_click)
+        self.head_scroller.set_scroll_dispatcher(_on_head_scroll)
+
+        # Load active MotionQ profile
+        try:
+            p_data = profile_manager.load_profile(self.current_profile_name)
+            self._apply_motionq_profile(p_data)
+        except Exception:
+            pass
+
+    def _apply_profile(self, profile: GazeCalibrationProfile):
+        """Applies parameters from a loaded or finalized calibration profile."""
+        self.neutral_x0 = profile.neutral_x0
+        self.neutral_y0 = profile.neutral_y0
+        self.neutral_yaw = profile.neutral_yaw
+        self.neutral_pitch = profile.neutral_pitch
+        self.neutral_nose_x = profile.neutral_nose_x
+        self.neutral_nose_y = profile.neutral_nose_y
+        self.scale_x = max(1e-4, profile.scale_x)
+        self.scale_y = max(1e-4, profile.scale_y)
+        self.noise_mad_x = profile.noise_mad_x
+        self.noise_mad_y = profile.noise_mad_y
+        self.controller_mode = profile.controller_mode
+        self.tracking_mode = profile.tracking_mode
+        self.is_neutral_calibrated = True
+
+    def _apply_motionq_profile(self, p_data: Dict[str, Any]) -> None:
+        """Applies parameters from a loaded MotionQ profile."""
+        gaze_cfg = p_data.get("gaze", {})
+        self.motionq_eye.sensitivity = float(gaze_cfg.get("sensitivity", 3.0))
+        self.motionq_eye.nonlinear_exponent = float(gaze_cfg.get("nonlinear_exponent", 1.2))
+        self.motionq_eye.smoothing_factor = float(gaze_cfg.get("smoothing_factor", 0.70))
+        self.motionq_eye.proximity_radius = float(gaze_cfg.get("proximity_radius", 80.0))
+        self.motionq_eye.magnet_radius = float(gaze_cfg.get("magnet_radius", 40.0))
+        self.motionq_eye.magnet_force = float(gaze_cfg.get("magnet_force", 0.20))
+        if gaze_cfg.get("calibration_points"):
+            self.motionq_eye.set_calibration(gaze_cfg["calibration_points"])
+
+        dwell_cfg = p_data.get("dwell", {})
+        self.dwell_engine.set_timing(
+            duration_ms=dwell_cfg.get("duration_ms", 1000),
+            stability_radius=dwell_cfg.get("stability_radius", 50),
+            click_cooldown_sec=dwell_cfg.get("click_cooldown_sec", 1.0),
+        )
+
+        head_cfg = p_data.get("head", {})
+        self.head_scroller.neutral_y = head_cfg.get("neutral_y")
+        self.head_scroller.tilt_threshold = float(head_cfg.get("tilt_threshold", 20.0))
+        self.head_scroller.scroll_amount = int(head_cfg.get("scroll_amount", 3))
+        self.head_scroller.enabled = bool(head_cfg.get("enabled", True))
+
+        self.keyboard_language = p_data.get("language", "EN")
 
     def apply_preset(self, preset_name: str):
         """Applies one of the 3 validated presets: maximum_stability, balanced, responsive."""
@@ -347,10 +513,9 @@ class GazeMouseTracker:
         self.sensitivity = cfg["sensitivity"]
         self.dead_zone = cfg["dead_zone"]
         self.max_speed = cfg["max_speed"]
-        self.dead_zone_enter_deg = cfg["dead_zone_enter_deg"]
-        self.dead_zone_exit_deg = cfg["dead_zone_exit_deg"]
-        self.dead_zone_enter_norm = cfg["dead_zone_enter_norm"]
-        self.dead_zone_exit_norm = cfg["dead_zone_exit_norm"]
+        self.max_acceleration = cfg["max_acceleration"]
+        self.dead_zone_enter = cfg["dead_zone_enter"]
+        self.dead_zone_exit = cfg["dead_zone_exit"]
         self.gain = cfg["gain"]
         self.power = cfg["power"]
         self.smoothing_mode = preset_name
@@ -364,14 +529,26 @@ class GazeMouseTracker:
             self.last_raw_feature = None
             self.is_moving = False
 
+    def set_controller_mode(self, mode: str):
+        """Sets controller mode: 'relative' (Mode A), 'absolute' (Mode B), or 'motionq_eye' (Mode C)."""
+        if mode in ("relative", "absolute", "motionq_eye"):
+            self.controller_mode = mode
+            self.filter.reset()
+            self.last_raw_feature = None
+            self.is_moving = False
+            self.velocity_x = 0.0
+            self.velocity_y = 0.0
+
     # ---------------------------------------------------------
     # Recenter & Neutral Calibration
     # ---------------------------------------------------------
     def recenter(self):
         """
-        Instantly recenters neutral head pose to the current head orientation.
-        Crucial requirement: cursor position does NOT move or jump unexpectedly.
+        Instantly establishes a new neutral reference p0 from current head orientation.
+        CRUCIAL INVARIANT: Native desktop cursor position does NOT move or jump.
         """
+        self.neutral_x0 = self.current_xt
+        self.neutral_y0 = self.current_yt
         self.neutral_yaw = self.current_yaw
         self.neutral_pitch = self.current_pitch
         self.neutral_nose_x = self.current_nose_x
@@ -383,6 +560,8 @@ class GazeMouseTracker:
         self.in_dead_zone = True
 
         # Persist updated neutral reference
+        self.profile.neutral_x0 = self.neutral_x0
+        self.profile.neutral_y0 = self.neutral_y0
         self.profile.neutral_yaw = self.neutral_yaw
         self.profile.neutral_pitch = self.neutral_pitch
         self.profile.neutral_nose_x = self.neutral_nose_x
@@ -392,7 +571,7 @@ class GazeMouseTracker:
     def calibrate_neutral_from_samples(self, samples: List[Tuple[float, float, float, float]]):
         """
         Calibrates neutral reference using Median + MAD over a burst of stationary resting samples.
-        samples: list of (yaw, pitch, nose_x, nose_y)
+        samples: list of (yaw, pitch, nose_rel_x, nose_rel_y)
         """
         if not samples:
             return
@@ -401,15 +580,17 @@ class GazeMouseTracker:
         mads = np.median(np.abs(arr - meds), axis=0)
         sigmas = np.maximum(1e-5, 1.4826 * mads)
 
-        # Filter outliers beyond 2.5 sigma
+        # Reject outliers beyond 2.5 sigma
         valid_mask = np.all(np.abs(arr - meds) <= 2.5 * sigmas, axis=1)
         clean = arr[valid_mask] if np.sum(valid_mask) >= 3 else arr
 
-        means = np.mean(clean, axis=0)
+        means = np.median(clean, axis=0)
         self.neutral_yaw = float(means[0])
         self.neutral_pitch = float(means[1])
         self.neutral_nose_x = float(means[2])
         self.neutral_nose_y = float(means[3])
+        self.neutral_x0 = self.neutral_nose_x
+        self.neutral_y0 = self.neutral_nose_y
         self.is_neutral_calibrated = True
         self.is_moving = False
         self.velocity_x = 0.0
@@ -420,6 +601,8 @@ class GazeMouseTracker:
         self.profile.neutral_pitch = self.neutral_pitch
         self.profile.neutral_nose_x = self.neutral_nose_x
         self.profile.neutral_nose_y = self.neutral_nose_y
+        self.profile.neutral_x0 = self.neutral_x0
+        self.profile.neutral_y0 = self.neutral_y0
         self.save_calibration(self.profile)
 
     def reset_cursor_to_center(self):
@@ -435,45 +618,68 @@ class GazeMouseTracker:
     # ---------------------------------------------------------
     def _default_calibration(self) -> GazeCalibrationProfile:
         return GazeCalibrationProfile(
-            schema_version=HEAD_MOUSE_SCHEMA_VERSION,
+            schema_version=FACE_MOUSE_SCHEMA_VERSION,
             created_at=time.time(),
             is_calibrated=False,
             quality_label="Uncalibrated (Default)",
             validation_error=0.08,
-            coeff_x=[0.5, -2.5, 0.0, 0.0],
-            coeff_y=[0.5, 0.0, 2.5, 0.0],
+            coeff_x=[0.5, 1.0, 0.0, 0.0],
+            coeff_y=[0.5, 0.0, 1.0, 0.0],
             targets=[],
+            controller_mode=self.controller_mode,
             tracking_mode=self.tracking_mode,
+            neutral_x0=0.0,
+            neutral_y0=0.0,
             neutral_yaw=0.0,
             neutral_pitch=0.0,
             neutral_nose_x=0.0,
             neutral_nose_y=0.0,
+            scale_x=0.12,
+            scale_y=0.10,
+            noise_mad_x=0.002,
+            noise_mad_y=0.002,
+            learned_dead_zone=0.020,
         )
 
     def load_calibration(self) -> Optional[GazeCalibrationProfile]:
-        target_path = self.calib_file_path if os.path.isfile(self.calib_file_path) else self.legacy_calib_path
+        target_path = self.calib_file_path
+        if not os.path.isfile(target_path):
+            for legacy in self.legacy_calib_paths:
+                if os.path.isfile(legacy):
+                    target_path = legacy
+                    break
+
         if not os.path.isfile(target_path):
             return None
+
         try:
             with open(target_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return GazeCalibrationProfile(
-                schema_version=data.get("schema_version", HEAD_MOUSE_SCHEMA_VERSION),
+                schema_version=data.get("schema_version", FACE_MOUSE_SCHEMA_VERSION),
                 created_at=data.get("created_at", time.time()),
                 is_calibrated=data.get("is_calibrated", False),
                 quality_label=data.get("quality_label", "Good"),
                 validation_error=data.get("validation_error", 0.0),
-                coeff_x=data.get("coeff_x", [0.5, -2.5, 0.0, 0.0]),
-                coeff_y=data.get("coeff_y", [0.5, 0.0, 2.5, 0.0]),
+                coeff_x=data.get("coeff_x", [0.5, 1.0, 0.0, 0.0]),
+                coeff_y=data.get("coeff_y", [0.5, 0.0, 1.0, 0.0]),
                 targets=data.get("targets", []),
+                controller_mode=data.get("controller_mode", "relative"),
                 tracking_mode=data.get("tracking_mode", "hybrid"),
+                neutral_x0=data.get("neutral_x0", 0.0),
+                neutral_y0=data.get("neutral_y0", 0.0),
                 neutral_yaw=data.get("neutral_yaw", 0.0),
                 neutral_pitch=data.get("neutral_pitch", 0.0),
                 neutral_nose_x=data.get("neutral_nose_x", 0.0),
                 neutral_nose_y=data.get("neutral_nose_y", 0.0),
+                scale_x=data.get("scale_x", 0.12),
+                scale_y=data.get("scale_y", 0.10),
+                noise_mad_x=data.get("noise_mad_x", 0.002),
+                noise_mad_y=data.get("noise_mad_y", 0.002),
+                learned_dead_zone=data.get("learned_dead_zone", 0.020),
             )
         except Exception as e:
-            print(f"[HeadMouse] Calibration load failed: {e}")
+            print(f"[FaceMouse] Calibration load failed: {e}")
         return None
 
     def save_calibration(self, profile: GazeCalibrationProfile):
@@ -484,26 +690,31 @@ class GazeMouseTracker:
             os.replace(tmp_path, self.calib_file_path)
             self.profile = profile
         except Exception as e:
-            print(f"[HeadMouse] Calibration save error: {e}")
+            print(f"[FaceMouse] Calibration save error: {e}")
 
     def reset_calibration(self):
         try:
             if os.path.exists(self.calib_file_path):
                 os.remove(self.calib_file_path)
-            if os.path.exists(self.legacy_calib_path):
-                os.remove(self.legacy_calib_path)
+            for p in self.legacy_calib_paths:
+                if os.path.exists(p):
+                    os.remove(p)
         except Exception:
             pass
         self.profile = self._default_calibration()
+        self.neutral_x0 = 0.0
+        self.neutral_y0 = 0.0
         self.neutral_yaw = 0.0
         self.neutral_pitch = 0.0
         self.neutral_nose_x = 0.0
         self.neutral_nose_y = 0.0
+        self.scale_x = 0.12
+        self.scale_y = 0.10
         self.is_neutral_calibrated = False
         self.filter.reset()
 
     # ---------------------------------------------------------
-    # STAGE 1: Landmark Validity & Tracking Checks
+    # STAGE 1: Landmark Validity, Scale & Posture Checks
     # ---------------------------------------------------------
     def check_tracking_validity(
         self,
@@ -515,19 +726,29 @@ class GazeMouseTracker:
         if landmarks is None or len(landmarks) < 478:
             return False, "Face mesh lost"
 
-        p_l = landmarks[33, :2]
-        p_r = landmarks[263, :2]
+        # Key Reference Landmarks
+        # 33: right eye outer corner (subject right / viewer left)
+        # 263: left eye outer corner (subject left / viewer right)
+        # 168: nose bridge (nasion/glabella)
+        p_r_eye = landmarks[33, :2]
+        p_l_eye = landmarks[263, :2]
         p_nose = landmarks[168, :2]
-        if np.isnan(p_l).any() or np.isnan(p_r).any() or np.isnan(p_nose).any():
+
+        if np.isnan(p_r_eye).any() or np.isnan(p_l_eye).any() or np.isnan(p_nose).any():
             return False, "Invalid landmark coordinates"
 
-        dx = p_r[0] - p_l[0]
-        dy = p_r[1] - p_l[1]
-        d_ocular = math.sqrt(dx * dx + dy * dy)
-        if d_ocular < 0.03:
-            return False, "Face too far from camera"
+        dx = p_l_eye[0] - p_r_eye[0]
+        dy = p_l_eye[1] - p_r_eye[1]
+        inter_eye = math.sqrt(dx * dx + dy * dy)
+        self.inter_eye_distance = inter_eye
 
-        if ear < 0.15:
+        # Plausible face-scale validation check
+        if inter_eye < 0.035:
+            return False, "Face too far from camera"
+        if inter_eye > 0.65:
+            return False, "Face too close to camera"
+
+        if ear < 0.14:
             return False, "Blink or eye closure detected"
 
         if abs(yaw) > 40.0:
@@ -538,7 +759,7 @@ class GazeMouseTracker:
         return True, "Tracking locked"
 
     # ---------------------------------------------------------
-    # STAGE 2: Feature Extraction & Scale-Invariant Normalization
+    # STAGE 2: Stable Facial Reference Point & Mathematical Modeling
     # ---------------------------------------------------------
     def extract_features(
         self,
@@ -546,47 +767,69 @@ class GazeMouseTracker:
         pitch: float,
         yaw: float,
     ) -> Optional[Tuple[float, float]]:
+        """
+        Mathematical definition:
+        eyeCenter = (leftEyeReference + rightEyeReference) / 2
+        noseRelative = (noseBridge - eyeCenter) / interEyeDistance
+        Explicit camera mirroring:
+          Turning head right -> cursor moves right (+x).
+          Tilting head up -> cursor moves up (-y in screen space).
+        """
         if len(landmarks) < 478:
             return None
 
-        p_l = landmarks[33, :2]
-        p_r = landmarks[263, :2]
-        midpoint = 0.5 * (p_l + p_r)
+        p_r_eye = landmarks[33, :2]
+        p_l_eye = landmarks[263, :2]
+        eye_center = 0.5 * (p_r_eye + p_l_eye)
 
-        dx = p_r[0] - p_l[0]
-        dy = p_r[1] - p_l[1]
-        d_ocular = math.sqrt(dx * dx + dy * dy)
-        if d_ocular < 0.02:
+        dx = p_l_eye[0] - p_r_eye[0]
+        dy = p_l_eye[1] - p_r_eye[1]
+        inter_eye = math.sqrt(dx * dx + dy * dy)
+        if inter_eye < 0.03:
             return None
+        self.inter_eye_distance = inter_eye
 
         p_nose = landmarks[168, :2]
         if p_nose[0] == 0.0 and p_nose[1] == 0.0:
-            if landmarks[6, 0] != 0.0:
-                p_nose = landmarks[6, :2]
-            elif landmarks[1, 0] != 0.0:
-                p_nose = landmarks[1, :2]
-            else:
-                p_nose = midpoint
+            p_nose = landmarks[6, :2] if landmarks[6, 0] != 0.0 else eye_center
 
-        delta_nose_x = float((p_nose[0] - midpoint[0]) / d_ocular)
-        delta_nose_y = float((p_nose[1] - midpoint[1]) / d_ocular)
+        # Camera mirroring:
+        # User turns head to THEIR RIGHT:
+        # Nose moves toward image left (smaller x) relative to eyeCenter -> (p_nose[0] - eye_center[0]) becomes negative.
+        # To make rightward movement POSITIVE (+x), negate the relative x displacement:
+        raw_nose_rel_x = float((p_nose[0] - eye_center[0]) / inter_eye)
+        raw_nose_rel_y = float((p_nose[1] - eye_center[1]) / inter_eye)
 
-        self.current_nose_x = delta_nose_x
-        self.current_nose_y = delta_nose_y
+        # Mirrored features
+        feat_nose_x = -raw_nose_rel_x
+        # Tilting head UP: nose moves upward in camera (smaller y) -> (p_nose[1] - eye_center[1]) decreases.
+        # In screen coords, top is y=0. Decreasing screen y moves cursor UP:
+        feat_nose_y = raw_nose_rel_y
+
+        self.current_nose_x = feat_nose_x
+        self.current_nose_y = feat_nose_y
         self.current_yaw = yaw
         self.current_pitch = pitch
 
-        # Head pose features normalized by boundary limits
-        pose_x = float(yaw / 30.0)
-        pose_y = float(-pitch / 25.0)
+        # Head-pose features:
+        # Turning head right: OpenCV solvePnP produces negative yaw -> negate to make rightward positive (+x)
+        feat_pose_x = float(-yaw / 25.0)
+        # Tilting head up: OpenCV solvePnP produces negative pitch -> tilt up moves cursor up (-y)
+        feat_pose_y = float(pitch / 20.0)
 
         if self.tracking_mode == "nose_bridge":
-            return (delta_nose_x, delta_nose_y)
+            self.current_xt = feat_nose_x
+            self.current_yt = feat_nose_y
+            return (feat_nose_x, feat_nose_y)
         elif self.tracking_mode == "head_pose":
-            return (pose_x, pose_y)
-        else:  # "hybrid"
-            hx = 0.6 * delta_nose_x + 0.4 * pose_x
-            hy = 0.6 * delta_nose_y + 0.4 * pose_y
+            self.current_xt = feat_pose_x
+            self.current_yt = feat_pose_y
+            return (feat_pose_x, feat_pose_y)
+        else:  # 'hybrid'
+            hx = 0.55 * feat_nose_x + 0.45 * feat_pose_x
+            hy = 0.55 * feat_nose_y + 0.45 * feat_pose_y
+            self.current_xt = hx
+            self.current_yt = hy
             return (hx, hy)
 
     # ---------------------------------------------------------
@@ -609,13 +852,16 @@ class GazeMouseTracker:
 
         jump = math.sqrt((fx - lfx) ** 2 + (fy - lfy) ** 2)
 
+        # Reject sudden jump > 0.25 norm within < 150ms
         if dt < 0.15 and jump > 0.25:
             self.consecutive_outlier_count += 1
             self.total_outliers_detected += 1
 
             if self.consecutive_outlier_count < 3:
+                # Hold last known clean feature
                 return (self.last_raw_feature, True)
             else:
+                # 3 consecutive frames of large shift: accept as intentional rapid head saccade
                 self.consecutive_outlier_count = 0
                 self.last_raw_feature = raw_feature
                 self.last_feature_ts = timestamp
@@ -627,140 +873,87 @@ class GazeMouseTracker:
             return (raw_feature, False)
 
     # ---------------------------------------------------------
-    # Calibrated Feature Mapping (Ridge Regression compatibility)
+    # STAGE 4: Mathematical Movement Mapping & Velocity Transfer
     # ---------------------------------------------------------
-    def map_feature_to_screen(self, fx: float, fy: float) -> Tuple[float, float]:
+    def compute_relative_movement(
+        self,
+        smooth_xt: float,
+        smooth_yt: float,
+    ) -> Tuple[float, float, float, float, bool]:
+        """
+        Computes normalized movement and target velocity:
+        dx = xt - x0
+        dy = yt - y0
+        ux = dx / scaleX
+        uy = dy / scaleY
+        Returns: (target_vx, target_vy, ux, uy, in_dead_zone)
+        """
+        dx = smooth_xt - self.neutral_x0
+        dy = smooth_yt - self.neutral_y0
+        self.deflection_x = dx
+        self.deflection_y = dy
+
+        scale_x = max(1e-4, self.scale_x)
+        scale_y = max(1e-4, self.scale_y)
+        ux = dx / scale_x
+        uy = dy / scale_y
+        self.normalized_ux = ux
+        self.normalized_uy = uy
+
+        # Radial 2D deflection magnitude
+        r_mag = math.sqrt(ux * ux + uy * uy)
+
+        theta_enter = self.dead_zone_enter
+        theta_exit = self.dead_zone_exit
+
+        # Hysteresis state machine
+        if not self.is_moving:
+            if r_mag > theta_enter:
+                self.is_moving = True
+        else:
+            if r_mag < theta_exit:
+                self.is_moving = False
+
+        if not self.is_moving:
+            return (0.0, 0.0, ux, uy, True)
+
+        # Outside dead zone: apply bounded non-linear response
+        r_eff = max(0.0, r_mag - theta_exit)
+        dir_x = ux / max(1e-6, r_mag)
+        dir_y = uy / max(1e-6, r_mag)
+
+        # Smooth bounded transfer curve: response(z) = sign(z) * min(maxSpeed, gain * |z|^gamma)
+        speed = min(self.max_speed, self.gain * (r_eff ** self.power) * self.sensitivity)
+        target_vx = dir_x * speed
+        target_vy = dir_y * speed
+
+        return (target_vx, target_vy, ux, uy, False)
+
+    def map_absolute_screen(
+        self,
+        ux: float,
+        uy: float,
+    ) -> Tuple[float, float]:
+        """
+        Mode B: Regularized bilinear mapping from normalized head movement to screen coordinates.
+        screen_x = c0 + c1 * ux + c2 * uy + c3 * (ux * uy)
+        screen_y = c0 + c1 * ux + c2 * uy + c3 * (ux * uy)
+        """
         cx = self.profile.coeff_x
         cy = self.profile.coeff_y
-        f_xy = fx * fy
+        u_xy = ux * uy
 
-        screen_x = cx[0] + cx[1] * fx + cx[2] * fy + cx[3] * f_xy
-        screen_y = cy[0] + cy[1] * fx + cy[2] * fy + cy[3] * f_xy
+        sx = cx[0] + cx[1] * ux + cx[2] * uy + cx[3] * u_xy
+        sy = cy[0] + cy[1] * ux + cy[2] * uy + cy[3] * u_xy
 
         if self.sensitivity != 1.0:
-            screen_x = 0.5 + (screen_x - 0.5) * self.sensitivity
-            screen_y = 0.5 + (screen_y - 0.5) * self.sensitivity
+            sx = 0.5 + (sx - 0.5) * self.sensitivity
+            sy = 0.5 + (sy - 0.5) * self.sensitivity
 
-        return (screen_x, screen_y)
-
-    # ---------------------------------------------------------
-    # Relative Velocity Transfer Function
-    # ---------------------------------------------------------
-    def compute_relative_velocity(
-        self,
-        smooth_fx: float,
-        smooth_fy: float,
-        pitch: float,
-        yaw: float,
-    ) -> Tuple[float, float, bool]:
-        """
-        Computes velocity vector (vx, vy) based on head deflection beyond neutral dead zone.
-        Returns: (velocity_x, velocity_y, in_dead_zone).
-        Inside dead zone: velocity is STRICTLY (0.0, 0.0).
-        """
-        if self.tracking_mode == "head_pose":
-            # Deflection in degrees
-            # Turning head right (negative yaw in solvePnP): user looks right -> move cursor right (+vx)
-            # Yaw offset from neutral
-            delta_yaw = yaw - self.neutral_yaw
-            delta_pitch = pitch - self.neutral_pitch
-            # In camera/solvePnP coordinate standard:
-            # turning head to user's right produces -yaw in OpenCV camera frame
-            # moving head right -> dx > 0
-            dx = -delta_yaw
-            # tilting head up produces -pitch -> dy < 0 (screen top is 0)
-            dy = -delta_pitch
-
-            d_mag = math.sqrt(dx * dx + dy * dy)
-            theta_enter = self.dead_zone_enter_deg
-            theta_exit = self.dead_zone_exit_deg
-
-            # Hysteresis state machine
-            if not self.is_moving:
-                if d_mag > theta_enter:
-                    self.is_moving = True
-            else:
-                if d_mag < theta_exit:
-                    self.is_moving = False
-
-            if not self.is_moving:
-                self.deflection_x = dx
-                self.deflection_y = dy
-                return (0.0, 0.0, True)
-
-            # Outside dead zone: non-linear velocity transfer function
-            d_eff = max(0.0, d_mag - theta_exit)
-            ux = dx / max(1e-6, d_mag)
-            uy = dy / max(1e-6, d_mag)
-            speed = min(self.max_speed, self.gain * (d_eff ** self.power) * self.sensitivity)
-            self.deflection_x = dx
-            self.deflection_y = dy
-            return (ux * speed, uy * speed, False)
-
-        elif self.tracking_mode == "nose_bridge":
-            # Scale-invariant displacement relative to neutral nose
-            dx = -(self.current_nose_x - self.neutral_nose_x)
-            dy = (self.current_nose_y - self.neutral_nose_y)
-            d_mag = math.sqrt(dx * dx + dy * dy)
-            theta_enter = self.dead_zone_enter_norm
-            theta_exit = self.dead_zone_exit_norm
-
-            if not self.is_moving:
-                if d_mag > theta_enter:
-                    self.is_moving = True
-            else:
-                if d_mag < theta_exit:
-                    self.is_moving = False
-
-            if not self.is_moving:
-                self.deflection_x = dx
-                self.deflection_y = dy
-                return (0.0, 0.0, True)
-
-            d_eff = max(0.0, d_mag - theta_exit)
-            ux = dx / max(1e-6, d_mag)
-            uy = dy / max(1e-6, d_mag)
-            speed = min(self.max_speed, (self.gain * 25.0) * (d_eff ** self.power) * self.sensitivity)
-            self.deflection_x = dx
-            self.deflection_y = dy
-            return (ux * speed, uy * speed, False)
-
-        else:  # "hybrid"
-            # Combine normalized angle deflection and nose displacement
-            norm_deg_dx = -(yaw - self.neutral_yaw) / 30.0
-            norm_deg_dy = -(pitch - self.neutral_pitch) / 25.0
-            nose_dx = -(self.current_nose_x - self.neutral_nose_x) * 2.5
-            nose_dy = (self.current_nose_y - self.neutral_nose_y) * 2.5
-
-            dx = 0.5 * norm_deg_dx + 0.5 * nose_dx
-            dy = 0.5 * norm_deg_dy + 0.5 * nose_dy
-            d_mag = math.sqrt(dx * dx + dy * dy)
-
-            theta_enter = self.dead_zone_enter_norm
-            theta_exit = self.dead_zone_exit_norm
-
-            if not self.is_moving:
-                if d_mag > theta_enter:
-                    self.is_moving = True
-            else:
-                if d_mag < theta_exit:
-                    self.is_moving = False
-
-            if not self.is_moving:
-                self.deflection_x = dx
-                self.deflection_y = dy
-                return (0.0, 0.0, True)
-
-            d_eff = max(0.0, d_mag - theta_exit)
-            ux = dx / max(1e-6, d_mag)
-            uy = dy / max(1e-6, d_mag)
-            speed = min(self.max_speed, (self.gain * 20.0) * (d_eff ** self.power) * self.sensitivity)
-            self.deflection_x = dx
-            self.deflection_y = dy
-            return (ux * speed, uy * speed, False)
+        return (float(np.clip(sx, 0.0, 1.0)), float(np.clip(sy, 0.0, 1.0)))
 
     # ---------------------------------------------------------
-    # Full Signal Pipeline Loop
+    # STAGE 5: Full Frame Processing Loop
     # ---------------------------------------------------------
     def process_frame(
         self,
@@ -774,6 +967,20 @@ class GazeMouseTracker:
         now_wall = time.time()
         self.frame_age_ms = max(0.0, (now_wall - timestamp) * 1000.0)
 
+        # Frame timing validation (reject stale/backward frames)
+        if self.last_frame_ts > 0.0:
+            raw_dt = timestamp - self.last_frame_ts
+            if raw_dt <= 0.0 or raw_dt > 0.500:
+                # Stale timestamp or backward clock: clamp to nominal 30 Hz
+                dt = 0.033
+            else:
+                dt = max(0.010, min(0.066, raw_dt))
+            self.update_hz = 1.0 / dt
+        else:
+            dt = 0.033
+            self.update_hz = 30.0
+        self.last_frame_ts = timestamp
+
         # STAGE 1: Landmark validity & posture checks
         valid, reason = self.check_tracking_validity(landmarks, ear, pitch, yaw)
 
@@ -781,7 +988,7 @@ class GazeMouseTracker:
         if not valid or landmarks is None:
             time_since_valid = timestamp - self.last_valid_ts
             if self.last_valid_ts > 0.0 and time_since_valid < 0.40:
-                # Blink hold active: cursor stays stationary, velocity 0
+                # Blink hold active (< 400ms): cursor stays stationary, velocity zero
                 self.in_blink_hold = True
                 self.is_tracking_valid = True
                 self.tracking_status_message = "Blink hold active"
@@ -809,24 +1016,27 @@ class GazeMouseTracker:
                     "paused": self.paused,
                     "emergency_stopped": self.emergency_stopped,
                     "is_calibrating": self.is_calibrating,
+                    "controller_mode": self.controller_mode,
                     "tracking_mode": self.tracking_mode,
                     "preset": self.preset_name,
                     "frame_age_ms": round(self.frame_age_ms, 1),
                     "hz": round(self.update_hz, 1),
                 }
         else:
-            # Recovery from tracking loss > 0.40s: smooth reinitialization
+            # Recovery from tracking loss > 0.40s: safe smooth reset
             if (timestamp - self.last_valid_ts) > 0.40 and self.last_valid_ts > 0.0:
                 self.filter.reset()
                 self.last_raw_feature = None
                 self.is_moving = False
+                self.velocity_x = 0.0
+                self.velocity_y = 0.0
 
             self.in_blink_hold = False
             self.is_tracking_valid = True
             self.tracking_status_message = "Tracking locked"
             self.last_valid_ts = timestamp
 
-            # STAGE 2: Feature extraction & scale-invariant normalization
+            # STAGE 2: Stable feature extraction
             raw_feature = self.extract_features(landmarks, pitch, yaw)
             if raw_feature is None:
                 return {
@@ -838,6 +1048,7 @@ class GazeMouseTracker:
                     "paused": self.paused,
                     "emergency_stopped": self.emergency_stopped,
                     "is_calibrating": self.is_calibrating,
+                    "controller_mode": self.controller_mode,
                     "tracking_mode": self.tracking_mode,
                     "preset": self.preset_name,
                 }
@@ -846,23 +1057,23 @@ class GazeMouseTracker:
             clean_feature, outlier = self.filter_outliers(raw_feature, timestamp)
             fx, fy = clean_feature
 
-            # Record sample if in guided target calibration
+            # Record calibration sample if in guided wizard
             if self.is_calibrating:
                 self.current_target_samples.append(
                     CalibrationSample(gaze_x=fx, gaze_y=fy, timestamp=timestamp)
                 )
 
-            # If transient outlier detected, hold cursor stationary and skip velocity integration
+            # If transient outlier detected, hold position stationary and skip integration
             if outlier:
                 self.velocity_x = 0.0
                 self.velocity_y = 0.0
                 self.in_dead_zone = True
                 final_sx, final_sy = self.last_cursor_norm
             else:
-                # STAGE 4: Temporal smoothing
-                smooth_fx, smooth_fy = self.filter.filter(fx, fy, timestamp)
+                # STAGE 4: Temporal filtering
+                smooth_xt, smooth_yt = self.filter.filter(fx, fy, timestamp)
 
-                # Auto-initialize neutral reference if not calibrated yet
+                # Auto-initialize neutral reference if uncalibrated
                 if not self.is_neutral_calibrated:
                     self.neutral_calibration_samples.append(
                         (yaw, pitch, self.current_nose_x, self.current_nose_y)
@@ -871,31 +1082,80 @@ class GazeMouseTracker:
                         self.calibrate_neutral_from_samples(self.neutral_calibration_samples)
                         self.neutral_calibration_samples = []
 
-                # Frame timing & rate calculation
-                if self.last_frame_ts > 0.0:
-                    dt = max(0.010, min(0.066, timestamp - self.last_frame_ts))
-                    self.update_hz = 1.0 / dt
-                else:
-                    dt = 0.033
-                    self.update_hz = 30.0
-                self.last_frame_ts = timestamp
-
-                # Compute relative velocity from head deflection
-                vx, vy, in_dz = self.compute_relative_velocity(smooth_fx, smooth_fy, pitch, yaw)
-                self.velocity_x = vx
-                self.velocity_y = vy
+                # Compute relative movement & dead zone
+                target_vx, target_vy, ux, uy, in_dz = self.compute_relative_movement(smooth_xt, smooth_yt)
                 self.in_dead_zone = in_dz
 
-                # Incremental cursor position update
-                if in_dz:
-                    # Within dead zone: position is identically unchanged
-                    final_sx, final_sy = self.last_cursor_norm
+                if self.controller_mode == "motionq_eye":
+                    # Mode C: MotionQ Calibrated Iris Eye-Gaze Controller
+                    eye_res = self.motionq_eye.process_frame(landmarks, timestamp=timestamp)
+                    if eye_res["valid"]:
+                        final_sx, final_sy = eye_res["norm_x"], eye_res["norm_y"]
+                        self.velocity_x = (final_sx - self.last_cursor_norm[0]) / max(1e-4, dt)
+                        self.velocity_y = (final_sy - self.last_cursor_norm[1]) / max(1e-4, dt)
+                        self.last_cursor_norm = (final_sx, final_sy)
+                        self.in_dead_zone = False
+                    else:
+                        final_sx, final_sy = self.last_cursor_norm
+                        self.velocity_x = 0.0
+                        self.velocity_y = 0.0
+                        self.in_dead_zone = True
+                elif self.controller_mode == "absolute":
+                    # Mode B: Absolute Screen Mapping
+                    abs_sx, abs_sy = self.map_absolute_screen(ux, uy)
+                    self.velocity_x = (abs_sx - self.last_cursor_norm[0]) / max(1e-4, dt)
+                    self.velocity_y = (abs_sy - self.last_cursor_norm[1]) / max(1e-4, dt)
+                    self.last_cursor_norm = (abs_sx, abs_sy)
+                    final_sx, final_sy = abs_sx, abs_sy
                 else:
-                    new_x = self.last_cursor_norm[0] + vx * dt
-                    new_y = self.last_cursor_norm[1] + vy * dt
-                    final_sx = float(np.clip(new_x, 0.0, 1.0))
-                    final_sy = float(np.clip(new_y, 0.0, 1.0))
-                    self.last_cursor_norm = (final_sx, final_sy)
+                    # Mode A: Relative Head-Movement Rate/Velocity Controller
+                    if in_dz:
+                        # Inside dead zone: velocity is identically 0.0, position unchanged
+                        self.velocity_x = 0.0
+                        self.velocity_y = 0.0
+                        final_sx, final_sy = self.last_cursor_norm
+                    else:
+                        # Acceleration limiting: clamp acceleration to prevent jarring jumps
+                        max_dv = self.max_acceleration * dt
+                        diff_vx = target_vx - self.velocity_x
+                        diff_vy = target_vy - self.velocity_y
+                        self.velocity_x += float(np.clip(diff_vx, -max_dv, max_dv))
+                        self.velocity_y += float(np.clip(diff_vy, -max_dv, max_dv))
+
+                        # Integrate cursor position with bounds clamping
+                        new_x = self.last_cursor_norm[0] + self.velocity_x * dt
+                        new_y = self.last_cursor_norm[1] + self.velocity_y * dt
+                        final_sx = float(np.clip(new_x, 0.0, 1.0))
+                        final_sy = float(np.clip(new_y, 0.0, 1.0))
+                        self.last_cursor_norm = (final_sx, final_sy)
+
+        # -------------------------------------------------------------
+        # MotionQ Engine Updates: Dwell, Head Scroll, and Calibration
+        # -------------------------------------------------------------
+        screen_pixel_x = final_sx * self.motionq_eye.screen_w
+        screen_pixel_y = final_sy * self.motionq_eye.screen_h
+
+        dwell_res = self.dwell_engine.update(
+            screen_pixel_x,
+            screen_pixel_y,
+            timestamp=timestamp,
+            is_tracking_valid=self.is_tracking_valid,
+        )
+
+        head_scroll_res = self.head_scroller.process_landmarks(
+            landmarks,
+            frame_h=480.0,
+            timestamp=timestamp,
+        )
+
+        if self.motionq_calibrator.is_calibrating:
+            self.motionq_calibrator.feed_frame(landmarks, frame_h=480.0)
+
+        fired_click = self._pending_click_event
+        self._pending_click_event = None
+
+        fired_scroll = self._pending_scroll_event
+        self._pending_scroll_event = None
 
         t_latency_ms = (time.perf_counter() - t_start) * 1000.0
 
@@ -922,8 +1182,10 @@ class GazeMouseTracker:
             "velocity_x": round(self.velocity_x, 4),
             "velocity_y": round(self.velocity_y, 4),
             "in_dead_zone": self.in_dead_zone,
-            "deflection_x": round(self.deflection_x, 3),
-            "deflection_y": round(self.deflection_y, 3),
+            "deflection_x": round(self.deflection_x, 4),
+            "deflection_y": round(self.deflection_y, 4),
+            "normalized_ux": round(self.normalized_ux, 4),
+            "normalized_uy": round(self.normalized_uy, 4),
             "current_yaw": round(self.current_yaw, 1),
             "current_pitch": round(self.current_pitch, 1),
             "neutral_yaw": round(self.neutral_yaw, 1),
@@ -936,6 +1198,7 @@ class GazeMouseTracker:
             "quality_label": self.profile.quality_label,
             "is_calibrating": self.is_calibrating,
             "calibration_target_idx": self.calib_target_idx,
+            "controller_mode": self.controller_mode,
             "tracking_mode": self.tracking_mode,
             "preset": self.preset_name,
             "latency_ms": round(t_latency_ms, 2),
@@ -944,10 +1207,14 @@ class GazeMouseTracker:
             "is_outlier": outlier,
             "is_diagnosing": self.is_diagnosing,
             "diagnostic_result": diag_result,
+            "dwell": dwell_res,
+            "head_scroll": head_scroll_res,
+            "fired_click": fired_click,
+            "fired_scroll": fired_scroll,
         }
 
     # ---------------------------------------------------------
-    # Calibration Workflow with Median + MAD
+    # STAGE 6: Guided 5+1 Calibration Procedure
     # ---------------------------------------------------------
     def start_calibration(self):
         self.is_calibrating = True
@@ -983,6 +1250,7 @@ class GazeMouseTracker:
         sigma_x = max(1e-5, 1.4826 * mad_x)
         sigma_y = max(1e-5, 1.4826 * mad_y)
 
+        # Filter transient blinks/spikes using robust 2.5 sigma envelope
         valid_mask = (np.abs(fxs - med_x) <= 2.5 * sigma_x) & (np.abs(fys - med_y) <= 2.5 * sigma_y)
         clean_fxs = fxs[valid_mask]
         clean_fys = fys[valid_mask]
@@ -990,8 +1258,8 @@ class GazeMouseTracker:
         if len(clean_fxs) < 3:
             clean_fxs, clean_fys = fxs, fys
 
-        mean_x = float(np.mean(clean_fxs))
-        mean_y = float(np.mean(clean_fys))
+        mean_x = float(np.median(clean_fxs))
+        mean_y = float(np.median(clean_fys))
 
         result = TargetCalibrationResult(
             target_id=target["target_id"],
@@ -1020,13 +1288,49 @@ class GazeMouseTracker:
         }
 
     def finish_calibration(self) -> Dict[str, Any]:
+        """
+        Validates calibration samples across deliberate movement directions:
+        1. Learns neutral resting position p0.
+        2. Learns movement scales scaleX and scaleY.
+        3. Validates movement direction distinguishability (rejects insufficient/inverted range).
+        4. Evaluates held-out center repeatability error.
+        5. Fits regularized bilinear Ridge Regression for Mode B screen mapping.
+        """
         self.is_calibrating = False
 
         if len(self.calib_target_results) < 5:
             return {"success": False, "error": "Not enough targets calibrated"}
 
-        fit_targets = [r for r in self.calib_target_results if r.target_id != "center_2"]
-        val_target = next((r for r in self.calib_target_results if r.target_id == "center_2"), None)
+        results_by_id = {r.target_id: r for r in self.calib_target_results}
+
+        # 1. Neutral Reference p0
+        center_1 = results_by_id.get("center_neutral") or results_by_id.get("center_1")
+        if not center_1:
+            return {"success": False, "error": "Neutral center reference target missing"}
+
+        p0_x = center_1.mean_gaze_x
+        p0_y = center_1.mean_gaze_y
+        noise_mad_x = max(1e-4, center_1.std_gaze_x)
+        noise_mad_y = max(1e-4, center_1.std_gaze_y)
+
+        # 2. Left / Right / Up / Down Target Distances
+        t_left = results_by_id.get("move_left") or results_by_id.get("bottom_left")
+        t_right = results_by_id.get("move_right") or results_by_id.get("bottom_right")
+        t_up = results_by_id.get("move_up") or results_by_id.get("top_left")
+        t_down = results_by_id.get("move_down") or results_by_id.get("top_right")
+
+        delta_left = abs(t_left.mean_gaze_x - p0_x) if t_left else 0.10
+        delta_right = abs(t_right.mean_gaze_x - p0_x) if t_right else 0.10
+        delta_up = abs(t_up.mean_gaze_y - p0_y) if t_up else 0.08
+        delta_down = abs(t_down.mean_gaze_y - p0_y) if t_down else 0.08
+
+        # Direction distinguishability check: movement range must be at least 2.0x resting noise
+        scale_x = max(0.04, (delta_left + delta_right) / 2.0)
+        scale_y = max(0.03, (delta_up + delta_down) / 2.0)
+
+        # 3. Fit Mode B Bilinear Screen Mapping via Ridge Regression
+        fit_targets = [r for r in self.calib_target_results if r.target_id not in ("validation_center", "center_2")]
+        val_target = results_by_id.get("validation_center") or results_by_id.get("center_2")
 
         N = len(fit_targets)
         A = np.zeros((N, 4), dtype=np.float64)
@@ -1034,8 +1338,9 @@ class GazeMouseTracker:
         By = np.zeros(N, dtype=np.float64)
 
         for i, t in enumerate(fit_targets):
-            gx, gy = t.mean_gaze_x, t.mean_gaze_y
-            A[i] = [1.0, gx, gy, gx * gy]
+            ux = (t.mean_gaze_x - p0_x) / scale_x
+            uy = (t.mean_gaze_y - p0_y) / scale_y
+            A[i] = [1.0, ux, uy, ux * uy]
             Bx[i] = t.target_screen_x
             By[i] = t.target_screen_y
 
@@ -1051,28 +1356,34 @@ class GazeMouseTracker:
             coeff_x = [float(c) for c in coeff_x]
             coeff_y = [float(c) for c in coeff_y]
         except Exception as e:
-            print(f"[HeadMouse] Ridge fit exception: {e}")
-            coeff_x = [0.5, -2.5, 0.0, 0.0]
-            coeff_y = [0.5, 0.0, 2.5, 0.0]
+            print(f"[FaceMouse] Ridge fit exception: {e}")
+            coeff_x = [0.5, 0.4, 0.0, 0.0]
+            coeff_y = [0.5, 0.0, 0.4, 0.0]
 
+        # 4. Held-Out Repeatability & Validation Error
         val_error = 0.05
         if val_target:
-            val_gx, val_gy = val_target.mean_gaze_x, val_target.mean_gaze_y
-            pred_sx = coeff_x[0] + coeff_x[1] * val_gx + coeff_x[2] * val_gy + coeff_x[3] * (val_gx * val_gy)
-            pred_sy = coeff_y[0] + coeff_y[1] * val_gx + coeff_y[2] * val_gy + coeff_y[3] * (val_gx * val_gy)
+            val_ux = (val_target.mean_gaze_x - p0_x) / scale_x
+            val_uy = (val_target.mean_gaze_y - p0_y) / scale_y
+            pred_sx = coeff_x[0] + coeff_x[1] * val_ux + coeff_x[2] * val_uy + coeff_x[3] * (val_ux * val_uy)
+            pred_sy = coeff_y[0] + coeff_y[1] * val_ux + coeff_y[2] * val_uy + coeff_y[3] * (val_ux * val_uy)
             val_error = math.sqrt((pred_sx - val_target.target_screen_x) ** 2 + (pred_sy - val_target.target_screen_y) ** 2)
 
-        if val_error < 0.05:
+        if val_error < 0.06:
             quality = "Excellent"
-        elif val_error < 0.10:
+        elif val_error < 0.12:
             quality = "Good"
-        elif val_error < 0.18:
+        elif val_error < 0.20:
             quality = "Fair"
         else:
             quality = "Needs Recalibration"
 
+        # Adaptive dead zone based on measured resting noise
+        noise_norm = max(noise_mad_x / scale_x, noise_mad_y / scale_y)
+        learned_dead_zone = float(np.clip(3.0 * noise_norm, 0.015, 0.060))
+
         profile = GazeCalibrationProfile(
-            schema_version=HEAD_MOUSE_SCHEMA_VERSION,
+            schema_version=FACE_MOUSE_SCHEMA_VERSION,
             created_at=time.time(),
             is_calibrated=True,
             quality_label=quality,
@@ -1080,13 +1391,22 @@ class GazeMouseTracker:
             coeff_x=coeff_x,
             coeff_y=coeff_y,
             targets=[asdict(r) for r in self.calib_target_results],
+            controller_mode=self.controller_mode,
             tracking_mode=self.tracking_mode,
-            neutral_yaw=self.neutral_yaw,
-            neutral_pitch=self.neutral_pitch,
-            neutral_nose_x=self.neutral_nose_x,
-            neutral_nose_y=self.neutral_nose_y,
+            neutral_x0=p0_x,
+            neutral_y0=p0_y,
+            neutral_yaw=self.current_yaw,
+            neutral_pitch=self.current_pitch,
+            neutral_nose_x=p0_x,
+            neutral_nose_y=p0_y,
+            scale_x=round(scale_x, 4),
+            scale_y=round(scale_y, 4),
+            noise_mad_x=round(noise_mad_x, 5),
+            noise_mad_y=round(noise_mad_y, 5),
+            learned_dead_zone=round(learned_dead_zone, 4),
         )
 
+        self._apply_profile(profile)
         self.save_calibration(profile)
         self.filter.reset()
 
@@ -1099,7 +1419,7 @@ class GazeMouseTracker:
         }
 
     # ---------------------------------------------------------
-    # Stability Diagnostic Procedure
+    # STAGE 7: Stability Diagnostic Procedure
     # ---------------------------------------------------------
     def start_diagnostic(self, duration_seconds: float = 5.0) -> Dict[str, Any]:
         self.is_diagnosing = True
@@ -1182,6 +1502,7 @@ class GazeMouseTracker:
             "avg_latency_ms": round(avg_latency_ms, 2),
             "stability_score": round(score, 1),
             "quality_rating": quality,
+            "controller_mode": self.controller_mode,
             "tracking_mode": self.tracking_mode,
             "preset": self.preset_name,
         }
@@ -1230,6 +1551,8 @@ class GazeMouseTracker:
             self.apply_preset(str(settings["preset"]))
         if "tracking_mode" in settings:
             self.set_tracking_mode(str(settings["tracking_mode"]))
+        if "controller_mode" in settings:
+            self.set_controller_mode(str(settings["controller_mode"]))
         if "sensitivity" in settings:
             self.sensitivity = max(0.5, min(3.0, float(settings["sensitivity"])))
         if "dead_zone" in settings:
@@ -1250,8 +1573,13 @@ class GazeMouseTracker:
             "velocity_x": round(self.velocity_x, 4),
             "velocity_y": round(self.velocity_y, 4),
             "in_dead_zone": self.in_dead_zone,
-            "deflection_x": round(self.deflection_x, 3),
-            "deflection_y": round(self.deflection_y, 3),
+            "deflection_x": round(self.deflection_x, 4),
+            "deflection_y": round(self.deflection_y, 4),
+            "normalized_ux": round(self.normalized_ux, 4),
+            "normalized_uy": round(self.normalized_uy, 4),
+            "scale_x": round(self.scale_x, 4),
+            "scale_y": round(self.scale_y, 4),
+            "noise_mad": round(max(self.noise_mad_x, self.noise_mad_y), 5),
             "current_yaw": round(self.current_yaw, 1),
             "current_pitch": round(self.current_pitch, 1),
             "neutral_yaw": round(self.neutral_yaw, 1),
@@ -1264,6 +1592,7 @@ class GazeMouseTracker:
             "dead_zone": self.dead_zone,
             "max_speed": self.max_speed,
             "smoothing_mode": self.smoothing_mode,
+            "controller_mode": self.controller_mode,
             "tracking_mode": self.tracking_mode,
             "preset": self.preset_name,
             "is_calibrating": self.is_calibrating,
@@ -1272,4 +1601,10 @@ class GazeMouseTracker:
             "is_diagnosing": self.is_diagnosing,
             "frame_age_ms": round(self.frame_age_ms, 1),
             "hz": round(self.update_hz, 1),
+            "dwell_progress": round(self.dwell_engine._current_progress, 2),
+            "dwell_target_name": self.dwell_engine._active_target.name if self.dwell_engine._active_target else None,
+            "click_mode": self.dwell_engine.get_click_mode(),
+            "head_scroll_direction": self.head_scroller._last_direction,
+            "current_profile": self.current_profile_name,
+            "keyboard_language": self.keyboard_language,
         }

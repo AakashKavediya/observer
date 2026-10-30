@@ -94,6 +94,30 @@ pub fn check_accessibility_permission(
 }
 
 #[tauri::command]
+pub fn native_type_text(
+    text: String,
+    mouse: State<'_, Arc<NativeMouseController>>,
+) -> Result<(), String> {
+    mouse.type_text(&text)
+}
+
+#[tauri::command]
+pub fn native_key_press(
+    key: String,
+    mouse: State<'_, Arc<NativeMouseController>>,
+) -> Result<(), String> {
+    mouse.press_key(&key)
+}
+
+#[tauri::command]
+pub fn native_key_combo(
+    combo: String,
+    mouse: State<'_, Arc<NativeMouseController>>,
+) -> Result<(), String> {
+    mouse.key_combo(&combo)
+}
+
+#[tauri::command]
 pub fn native_mouse_emergency_stop(
     mouse: State<'_, Arc<NativeMouseController>>,
     sidecar: State<'_, Arc<SidecarManager>>,

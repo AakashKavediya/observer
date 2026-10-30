@@ -20,6 +20,7 @@ if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
 import time
+import uuid
 import base64
 import argparse
 import threading
@@ -39,6 +40,14 @@ from observer_engine.fake_engine import FakeEngine
 from observer_engine.sequencer.service import TaskSequencerService
 from observer_engine.sequencer.models import UserPreferences
 from observer_engine.gaze_mouse import GazeMouseTracker
+from observer_engine.health_tech import (
+    HealthTechRepository,
+    SignalQualityEvaluator,
+    BehavioralFeatureExtractor,
+    ObservationRecord,
+    ValidityStatus,
+    Provenance,
+)
 from observer_engine.ipc import (
     StatusEvent,
     GazeStatusEvent,
@@ -70,6 +79,22 @@ from observer_engine.ipc import (
     SequencerDiagnosticsEvent,
     SequencerConversationsListEvent,
     SequencerConversationLoadedEvent,
+    GazeCursorClickEvent,
+    GazeCursorScrollEvent,
+    NativeTypeTextEvent,
+    NativeKeyComboEvent,
+    NativeKeyPressEvent,
+    MotionQDwellEvent,
+    MotionQProfileListEvent,
+    MotionQPredictionEvent,
+    MotionQCalibrationStatusEvent,
+    HealthTechSnapshotEvent,
+    HealthTechCheckInListEvent,
+    HealthTechObservationsListEvent,
+    HealthTechSessionsListEvent,
+    HealthTechEventsListEvent,
+    HealthTechBaselineEvent,
+    HealthTechReportEvent,
     serialize_message,
     parse_incoming_line,
 )
@@ -318,6 +343,12 @@ class LiveEngineRunner:
         self.history_mgr = HistoryManager()
         self.sequencer_service = TaskSequencerService()
         self.gaze_tracker = GazeMouseTracker()
+
+        # Health-Tech Physiological & Behavioral Platform
+        self.health_tech_repo = HealthTechRepository()
+        self.signal_evaluator = SignalQualityEvaluator()
+        self.behavioral_extractor = BehavioralFeatureExtractor(session_id=self.health_tech_repo.active_session.session_id)
+        self.last_ht_snapshot_emit = 0.0
 
     def _handle_camera_status(self, status: str, fps: float) -> None:
         self.camera_status = status
@@ -609,6 +640,10 @@ class LiveEngineRunner:
             if cmd.tracking_mode:
                 self.gaze_tracker.set_tracking_mode(cmd.tracking_mode)
             self._emit_gaze_status()
+        elif cmd.name == "gaze_set_controller_mode":
+            if cmd.controller_mode:
+                self.gaze_tracker.set_controller_mode(cmd.controller_mode)
+            self._emit_gaze_status()
         elif cmd.name == "gaze_set_preset":
             if cmd.preset:
                 self.gaze_tracker.apply_preset(cmd.preset)
@@ -619,6 +654,228 @@ class LiveEngineRunner:
         elif cmd.name == "gaze_reset_cursor":
             self.gaze_tracker.reset_cursor_to_center()
             self._emit_gaze_status()
+        elif cmd.name == "motionq_get_status":
+            self._emit_gaze_status()
+        elif cmd.name == "motionq_register_target":
+            if cmd.target_data:
+                td = cmd.target_data
+                self.gaze_tracker.dwell_engine.register_target(
+                    x=td.get("x", 0),
+                    y=td.get("y", 0),
+                    width=td.get("width", 50),
+                    height=td.get("height", 50),
+                    target_id=td.get("target_id") or td.get("id"),
+                    action=td.get("action"),
+                    name=td.get("name"),
+                    duration_ms=td.get("duration_ms"),
+                    stability_radius=td.get("stability_radius"),
+                )
+        elif cmd.name == "motionq_unregister_target":
+            if cmd.target_id:
+                self.gaze_tracker.dwell_engine._targets = [
+                    t for t in self.gaze_tracker.dwell_engine._targets if t.target_id != cmd.target_id
+                ]
+        elif cmd.name == "motionq_clear_targets":
+            self.gaze_tracker.dwell_engine.clear_targets()
+        elif cmd.name == "motionq_set_click_mode":
+            self.gaze_tracker.dwell_engine.set_click_mode(cmd.click_mode)
+            self._emit_gaze_status()
+        elif cmd.name == "motionq_toggle_click_mode":
+            if cmd.click_mode:
+                self.gaze_tracker.dwell_engine.toggle_click_mode(cmd.click_mode)
+            self._emit_gaze_status()
+        elif cmd.name == "motionq_start_calibration":
+            cal_res = self.gaze_tracker.motionq_calibrator.start_calibration()
+            emit_ipc(MotionQCalibrationStatusEvent(
+                stage=cal_res.get("stage", "gaze"),
+                target_index=cal_res.get("target_index", 0),
+                target_label=cal_res.get("target_label"),
+                screen_x=cal_res.get("screen_x"),
+                screen_y=cal_res.get("screen_y"),
+                message="Calibration started",
+            ))
+        elif cmd.name == "motionq_advance_calibration":
+            cal_res = self.gaze_tracker.motionq_calibrator.advance_target()
+            emit_ipc(MotionQCalibrationStatusEvent(
+                stage=cal_res.get("stage", "complete"),
+                target_index=cal_res.get("target_index", 0),
+                target_label=cal_res.get("target_label"),
+                screen_x=cal_res.get("screen_x"),
+                screen_y=cal_res.get("screen_y"),
+                message=cal_res.get("message"),
+                validation_error_px=cal_res.get("validation_error_px"),
+                complete=(cal_res.get("stage") == "complete"),
+            ))
+            if cal_res.get("stage") == "complete":
+                from observer_engine.motionq import profile_manager
+                p_data = profile_manager.load_profile(self.gaze_tracker.current_profile_name)
+                self.gaze_tracker._apply_motionq_profile(p_data)
+        elif cmd.name == "motionq_cancel_calibration":
+            self.gaze_tracker.motionq_calibrator.cancel()
+            emit_ipc(MotionQCalibrationStatusEvent(stage="idle", target_index=0, complete=False, message="Calibration cancelled"))
+        elif cmd.name == "motionq_load_profile":
+            from observer_engine.motionq import profile_manager
+            pname = cmd.profile_name or "default"
+            p_data = profile_manager.load_profile(pname)
+            self.gaze_tracker.current_profile_name = pname
+            self.gaze_tracker._apply_motionq_profile(p_data)
+            emit_ipc(MotionQProfileListEvent(
+                profiles=profile_manager.list_profiles(),
+                active_profile=pname,
+                data=p_data,
+            ))
+            self._emit_gaze_status()
+        elif cmd.name == "motionq_save_profile":
+            from observer_engine.motionq import profile_manager
+            if cmd.profile_name and cmd.profile_data:
+                profile_manager.save_profile(cmd.profile_name, cmd.profile_data)
+                self.gaze_tracker.current_profile_name = cmd.profile_name
+                self.gaze_tracker._apply_motionq_profile(cmd.profile_data)
+                emit_ipc(MotionQProfileListEvent(
+                    profiles=profile_manager.list_profiles(),
+                    active_profile=cmd.profile_name,
+                    data=cmd.profile_data,
+                ))
+        elif cmd.name == "motionq_list_profiles":
+            from observer_engine.motionq import profile_manager
+            profs = profile_manager.list_profiles()
+            cur_data = profile_manager.load_profile(self.gaze_tracker.current_profile_name)
+            emit_ipc(MotionQProfileListEvent(
+                profiles=profs,
+                active_profile=self.gaze_tracker.current_profile_name,
+                data=cur_data,
+            ))
+        elif cmd.name == "motionq_create_profile":
+            from observer_engine.motionq import profile_manager
+            if cmd.profile_name:
+                profile_manager.create_profile(cmd.profile_name)
+                profs = profile_manager.list_profiles()
+                emit_ipc(MotionQProfileListEvent(
+                    profiles=profs,
+                    active_profile=self.gaze_tracker.current_profile_name,
+                ))
+        elif cmd.name == "motionq_delete_profile":
+            from observer_engine.motionq import profile_manager
+            if cmd.profile_name:
+                profile_manager.delete_profile(cmd.profile_name)
+                profs = profile_manager.list_profiles()
+                emit_ipc(MotionQProfileListEvent(
+                    profiles=profs,
+                    active_profile=self.gaze_tracker.current_profile_name,
+                ))
+        elif cmd.name == "motionq_reset_profile":
+            from observer_engine.motionq import profile_manager
+            pname = cmd.profile_name or self.gaze_tracker.current_profile_name
+            profile_manager.reset_profile(pname)
+            p_data = profile_manager.load_profile(pname)
+            self.gaze_tracker._apply_motionq_profile(p_data)
+            emit_ipc(MotionQProfileListEvent(
+                profiles=profile_manager.list_profiles(),
+                active_profile=pname,
+                data=p_data,
+            ))
+        elif cmd.name == "motionq_set_head_scroll":
+            if cmd.head_scroll_enabled is not None:
+                self.gaze_tracker.head_scroller.set_enabled(cmd.head_scroll_enabled)
+            if cmd.head_neutral_y is not None:
+                self.gaze_tracker.head_scroller.set_neutral_y(cmd.head_neutral_y)
+            if cmd.head_tilt_threshold is not None:
+                self.gaze_tracker.head_scroller.tilt_threshold = float(cmd.head_tilt_threshold)
+            self._emit_gaze_status()
+        elif cmd.name == "motionq_word_predict":
+            preds = self.gaze_tracker.word_predictor.predict(
+                prefix=cmd.prefix or "",
+                language=cmd.language or self.gaze_tracker.keyboard_language,
+            )
+            emit_ipc(MotionQPredictionEvent(
+                prefix=cmd.prefix or "",
+                language=cmd.language or self.gaze_tracker.keyboard_language,
+                predictions=preds,
+            ))
+        elif cmd.name == "motionq_voice_command":
+            if cmd.transcript:
+                v_res = self.gaze_tracker.voice_dispatcher.process_transcript(cmd.transcript)
+                if v_res and v_res.get("command"):
+                    c_name = v_res["command"]
+                    if c_name == "start eye control":
+                        self.gaze_tracker.set_enabled(True)
+                    elif c_name == "pause eye control":
+                        self.gaze_tracker.set_paused(True)
+                    elif c_name == "resume eye control":
+                        self.gaze_tracker.set_paused(False)
+                    elif c_name == "recenter":
+                        self.gaze_tracker.recenter()
+                    elif c_name == "recalibrate":
+                        self.gaze_tracker.motionq_calibrator.start_calibration()
+                    elif c_name == "click":
+                        emit_ipc(GazeCursorClickEvent(button="left", double=False))
+                    elif c_name == "double-click":
+                        emit_ipc(GazeCursorClickEvent(button="left", double=True))
+                    elif c_name == "right-click":
+                        emit_ipc(GazeCursorClickEvent(button="right", double=False))
+                    elif c_name == "scroll up":
+                        emit_ipc(GazeCursorScrollEvent(delta_y=3))
+                    elif c_name == "scroll down":
+                        emit_ipc(GazeCursorScrollEvent(delta_y=-3))
+                    elif c_name == "emergency stop":
+                        self.gaze_tracker.emergency_stop()
+                    self._emit_gaze_status()
+        elif cmd.name == "motionq_type_text":
+            if cmd.text:
+                emit_ipc(NativeTypeTextEvent(text=cmd.text))
+        elif cmd.name == "motionq_key_combo":
+            if cmd.combo:
+                emit_ipc(NativeKeyComboEvent(combo=cmd.combo))
+        elif cmd.name == "motionq_key_press":
+            if cmd.key:
+                emit_ipc(NativeKeyPressEvent(key=cmd.key))
+        # Health-Tech Physiological & Behavioral Handlers
+        elif cmd.name == "ht_record_checkin":
+            data = cmd.checkin_data or {}
+            self.health_tech_repo.checkin_manager.record_checkin(
+                energy=data.get("energy"),
+                effort=data.get("effort"),
+                task_difficulty=data.get("task_difficulty"),
+                feeling_stuck=data.get("feeling_stuck"),
+                discomfort=data.get("discomfort"),
+                stress=data.get("stress"),
+                sleep_quality=data.get("sleep_quality"),
+                notes=data.get("notes"),
+                session_id=self.health_tech_repo.active_session.session_id,
+                task_id=cmd.task_id,
+            )
+            emit_ipc(HealthTechCheckInListEvent(checkins=self.health_tech_repo.checkin_manager.get_checkins()))
+        elif cmd.name == "ht_get_checkins":
+            emit_ipc(HealthTechCheckInListEvent(checkins=self.health_tech_repo.checkin_manager.get_checkins(cmd.start_ts, cmd.end_ts)))
+        elif cmd.name == "ht_get_recent_observations":
+            obs = self.health_tech_repo.get_recent_observations(cmd.observation_count or 100, cmd.feature_filter)
+            emit_ipc(HealthTechObservationsListEvent(observations=obs))
+        elif cmd.name == "ht_get_sessions":
+            emit_ipc(HealthTechSessionsListEvent(sessions=self.health_tech_repo.get_sessions()))
+        elif cmd.name == "ht_generate_report":
+            rep = self.health_tech_repo.generate_report(cmd.session_filter, cmd.start_ts, cmd.end_ts)
+            emit_ipc(HealthTechReportEvent(report=rep))
+            emit_ipc(ReportGeneratedEvent(report=rep))
+        elif cmd.name == "ht_get_events":
+            emit_ipc(HealthTechEventsListEvent(events=self.health_tech_repo.get_events(cmd.session_filter)))
+        elif cmd.name == "ht_start_baseline":
+            self.health_tech_repo.baseline_manager.start_calibration(cmd.stage or "neutral_face")
+        elif cmd.name == "ht_finish_baseline":
+            prof = self.health_tech_repo.baseline_manager.finish_calibration()
+            emit_ipc(HealthTechBaselineEvent(profile=prof.to_dict()))
+        elif cmd.name == "ht_reset_baseline":
+            self.health_tech_repo.baseline_manager.reset_baseline()
+            emit_ipc(HealthTechBaselineEvent(profile=self.health_tech_repo.baseline_manager.current_profile.to_dict()))
+        elif cmd.name == "ht_get_baseline":
+            emit_ipc(HealthTechBaselineEvent(profile=self.health_tech_repo.baseline_manager.current_profile.to_dict()))
+        elif cmd.name == "ht_delete_all_data":
+            self.health_tech_repo.delete_all_data()
+            self.history_mgr.clear_all()
+            emit_ipc(HealthTechSessionsListEvent(sessions=[]))
+            emit_ipc(HealthTechObservationsListEvent(observations=[]))
+            emit_ipc(HealthTechCheckInListEvent(checkins=[]))
+            emit_ipc(HealthTechEventsListEvent(events=[]))
+            emit_ipc(HealthTechBaselineEvent(profile=self.health_tech_repo.baseline_manager.current_profile.to_dict()))
 
     def _emit_gaze_status(self) -> None:
         st = self.gaze_tracker.get_status()
@@ -717,6 +974,130 @@ class LiveEngineRunner:
                             timestamp=now,
                         )
 
+                    # Health-Tech Signal Quality Evaluation
+                    sq_valid, sq_reason, sq_metrics = self.signal_evaluator.evaluate_frame(
+                        frame_bgr=frame,
+                        landmarks=res.landmarks if res is not None else None,
+                        pitch=feat.pitch if feat is not None else 0.0,
+                        yaw=feat.yaw if feat is not None else 0.0,
+                        roll=feat.roll if feat is not None else 0.0,
+                        timestamp=now,
+                    )
+
+                    # Health-Tech Physiological & Behavioral Snapshot
+                    ht_snapshot = self.behavioral_extractor.extract_snapshot(
+                        frame_bgr=frame,
+                        landmarks=res.landmarks if res is not None else None,
+                        blendshapes=res.blendshapes if res is not None else None,
+                        timestamp=now,
+                        is_tracking_valid=sq_valid,
+                        tracking_reason=sq_reason,
+                    )
+
+                    # Record baseline sample if calibrating
+                    if self.health_tech_repo.baseline_manager._calibrating:
+                        self.health_tech_repo.baseline_manager.add_calibration_sample(ht_snapshot)
+
+                    # Persist granular observation records into HealthTech repository
+                    if ht_snapshot.valid:
+                        for f_name, f_val, f_unit in [
+                            ("ear_avg", ht_snapshot.ear_avg, "ratio"),
+                            ("ear_left", ht_snapshot.ear_left, "ratio"),
+                            ("ear_right", ht_snapshot.ear_right, "ratio"),
+                            ("blink_rate_60s", ht_snapshot.blink_rate_60s, "per_min"),
+                            ("mouth_corner_elevation_left", ht_snapshot.mouth_corner_elevation_left, "ratio"),
+                            ("mouth_corner_elevation_right", ht_snapshot.mouth_corner_elevation_right, "ratio"),
+                            ("mouth_width_ratio", ht_snapshot.mouth_width_ratio, "ratio"),
+                            ("smile_score_avg", ht_snapshot.smile_score_avg, "score_0_1"),
+                            ("brow_elevation_left", ht_snapshot.brow_elevation_left, "ratio"),
+                            ("brow_elevation_right", ht_snapshot.brow_elevation_right, "ratio"),
+                            ("head_angular_velocity", ht_snapshot.angular_velocity, "deg_per_sec"),
+                            ("head_pitch", ht_snapshot.pitch, "degrees"),
+                            ("head_yaw", ht_snapshot.yaw, "degrees"),
+                            ("head_roll", ht_snapshot.roll, "degrees"),
+                        ]:
+                            if f_val is not None:
+                                self.health_tech_repo.record_observation(
+                                    ObservationRecord(
+                                        observation_id=str(uuid.uuid4()),
+                                        session_id=self.health_tech_repo.active_session.session_id,
+                                        timestamp=now,
+                                        monotonic_time=time.monotonic(),
+                                        feature_name=f_name,
+                                        measured_value=f_val,
+                                        unit=f_unit,
+                                        source_stream="webcam_face",
+                                        validity_status=ValidityStatus.VALID.value,
+                                        signal_quality=sq_metrics,
+                                        provenance=Provenance.DIRECTLY_MEASURED.value if "score" not in f_name else Provenance.DERIVED.value,
+                                    )
+                                )
+
+                    # Run Conservative Event Engine
+                    win_quality = self.signal_evaluator.get_window_quality(now)
+                    new_events = self.health_tech_repo.event_engine.evaluate_signals(
+                        snapshot=ht_snapshot,
+                        baseline=self.health_tech_repo.baseline_manager.current_profile,
+                        idle_seconds=self.desktop_input.idle_seconds,
+                        window_switch_count_60s=self.desktop_input.window_switch_count_60s,
+                        usable_ratio=win_quality.usable_ratio,
+                        now=now,
+                    )
+                    for ev in new_events:
+                        emit_ipc(ObservationItemEvent(observation=ev.to_dict()))
+
+                    # Emit HealthTechSnapshotEvent (~5-10 Hz)
+                    if now - self.last_ht_snapshot_emit >= 0.15:
+                        self.last_ht_snapshot_emit = now
+                        emit_ipc(
+                            HealthTechSnapshotEvent(
+                                session_id=self.health_tech_repo.active_session.session_id,
+                                timestamp=now,
+                                valid=ht_snapshot.valid,
+                                quality_reason=ht_snapshot.quality_reason,
+                                ear_left=ht_snapshot.ear_left,
+                                ear_right=ht_snapshot.ear_right,
+                                ear_avg=ht_snapshot.ear_avg,
+                                is_blink=ht_snapshot.is_blink,
+                                blink_count_total=ht_snapshot.blink_count_total,
+                                blink_rate_60s=ht_snapshot.blink_rate_60s,
+                                ibi_median=ht_snapshot.ibi_median,
+                                ibi_std=ht_snapshot.ibi_std,
+                                last_closure_duration=ht_snapshot.last_closure_duration,
+                                is_long_closure=ht_snapshot.is_long_closure,
+                                eye_aperture_variability_30s=ht_snapshot.eye_aperture_variability_30s,
+                                gaze_dispersion_30s=ht_snapshot.gaze_dispersion_30s,
+                                gaze_shifts_per_min=ht_snapshot.gaze_shifts_per_min,
+                                mouth_corner_elevation_left=ht_snapshot.mouth_corner_elevation_left,
+                                mouth_corner_elevation_right=ht_snapshot.mouth_corner_elevation_right,
+                                mouth_width_ratio=ht_snapshot.mouth_width_ratio,
+                                smile_score_avg=ht_snapshot.smile_score_avg,
+                                smile_asymmetry=ht_snapshot.smile_asymmetry,
+                                smile_duration_above_thresh_30s=ht_snapshot.smile_duration_above_thresh_30s,
+                                smile_event_count_total=ht_snapshot.smile_event_count_total,
+                                brow_elevation_left=ht_snapshot.brow_elevation_left,
+                                brow_elevation_right=ht_snapshot.brow_elevation_right,
+                                brow_asymmetry=ht_snapshot.brow_asymmetry,
+                                mouth_opening_ratio=ht_snapshot.mouth_opening_ratio,
+                                jaw_open_score=ht_snapshot.jaw_open_score,
+                                pitch=ht_snapshot.pitch,
+                                yaw=ht_snapshot.yaw,
+                                roll=ht_snapshot.roll,
+                                angular_velocity=ht_snapshot.angular_velocity,
+                                head_movement_range_30s=ht_snapshot.head_movement_range_30s,
+                                direction_changes_per_min=ht_snapshot.direction_changes_per_min,
+                                low_movement_duration_s=ht_snapshot.low_movement_duration_s,
+                                upper_body_available=ht_snapshot.upper_body_available,
+                                upper_body_reason=ht_snapshot.upper_body_reason,
+                                shoulder_tilt_deg=ht_snapshot.shoulder_tilt_deg,
+                                usable_ratio=win_quality.usable_ratio,
+                                mean_brightness=win_quality.mean_brightness,
+                                blur_score=win_quality.blur_score,
+                                fps=win_quality.fps,
+                                coverage_ratio=self.health_tech_repo.active_session.coverage_ratio,
+                            )
+                        )
+
                     # Process Track 4 Eye-Gaze Mouse
                     gaze_res = self.gaze_tracker.process_frame(
                         landmarks=res.landmarks if res is not None else None,
@@ -739,6 +1120,42 @@ class LiveEngineRunner:
                                 norm_y=gaze_res["norm_y"],
                                 valid=True,
                                 timestamp=now,
+                            )
+                        )
+
+                    # Native click triggered by Dwell Engine
+                    if gaze_res.get("fired_click") and not self.gaze_tracker.emergency_stopped:
+                        fc = gaze_res["fired_click"]
+                        emit_ipc(
+                            GazeCursorClickEvent(
+                                button=fc.get("button", "left"),
+                                double=fc.get("double", False),
+                                timestamp=now,
+                            )
+                        )
+
+                    # Native vertical scroll triggered by Head Tilt Scroller
+                    if gaze_res.get("fired_scroll") and not self.gaze_tracker.emergency_stopped:
+                        fs = gaze_res["fired_scroll"]
+                        emit_ipc(
+                            GazeCursorScrollEvent(
+                                delta_y=fs.get("delta_y", 0),
+                                timestamp=now,
+                            )
+                        )
+
+                    # Live Dwell Progress Telemetry
+                    dwell_info = gaze_res.get("dwell")
+                    if dwell_info and (dwell_info.get("progress", 0.0) > 0.0 or dwell_info.get("fired")):
+                        emit_ipc(
+                            MotionQDwellEvent(
+                                progress=dwell_info.get("progress", 0.0),
+                                center_x=dwell_info.get("center", (0.0, 0.0))[0],
+                                center_y=dwell_info.get("center", (0.0, 0.0))[1],
+                                active_target=dwell_info.get("active_target"),
+                                click_mode=dwell_info.get("click_mode"),
+                                fired=dwell_info.get("fired", False),
+                                action=dwell_info.get("action"),
                             )
                         )
 

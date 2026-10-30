@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { t } from "@/i18n";
 
 export const SettingsScreen: React.FC = () => {
-  const { settings, updateSettings, sendDeleteAllData, sendStartCalibration } =
+  const { settings, updateSettings, sendDeleteAllData, purgeAllHtData, sendStartCalibration } =
     useObserverStore();
 
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -43,8 +43,9 @@ export const SettingsScreen: React.FC = () => {
 
   const handleDeleteData = async () => {
     await sendDeleteAllData();
+    await purgeAllHtData();
     setConfirmDelete(false);
-    setDeleteStatus("All local calibration and preference data wiped cleanly.");
+    setDeleteStatus("All local calibration, observation records, check-ins, and reports wiped permanently.");
     setTimeout(() => setDeleteStatus(null), 4000);
   };
 

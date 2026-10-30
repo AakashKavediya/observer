@@ -21,6 +21,11 @@ import {
   Gauge,
   Sparkles,
   Target,
+  Keyboard,
+  Layers,
+  User,
+  Plus,
+  RefreshCw,
 } from "lucide-react";
 import { useObserverStore } from "@/store/useObserverStore";
 import { Card } from "@/components/ui/Card";
@@ -48,6 +53,7 @@ export const EyeControlScreen: React.FC = () => {
     gazeUpdateSettings,
     setTrackingMode,
     setStabilityPreset,
+    setControllerMode,
     startStabilityDiagnostic,
     finishStabilityDiagnostic,
     fetchGazeStatus,
@@ -56,6 +62,16 @@ export const EyeControlScreen: React.FC = () => {
     nativeMouseScroll,
     setVoiceControlActive,
     dispatchVoiceCommand,
+    showAssistiveToolbar,
+    showVirtualKeyboard,
+    toggleAssistiveToolbar,
+    toggleVirtualKeyboard,
+    motionqProfiles,
+    motionqActiveProfile,
+    fetchMotionQProfiles,
+    loadMotionQProfile,
+    createMotionQProfile,
+    resetMotionQProfile,
   } = useObserverStore();
 
   const [activeTab, setActiveTab] = useState<
@@ -64,6 +80,7 @@ export const EyeControlScreen: React.FC = () => {
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [diagnosticTimer, setDiagnosticTimer] = useState<number | null>(null);
+  const [newProfileName, setNewProfileName] = useState("");
 
   // Settings local state
   const [sensitivity, setSensitivity] = useState(gazeStatus?.sensitivity ?? 1.2);
@@ -75,6 +92,7 @@ export const EyeControlScreen: React.FC = () => {
   useEffect(() => {
     fetchGazeStatus();
     checkAccessibilityPermission();
+    fetchMotionQProfiles();
   }, []);
 
   // Sync settings when gazeStatus loads
@@ -197,14 +215,14 @@ export const EyeControlScreen: React.FC = () => {
   const activeTrackingMode = gazeStatus?.tracking_mode ?? "hybrid";
   const activePreset = gazeStatus?.preset ?? "balanced";
 
-  // Calibration Target coordinates for visual wizard
+  // Calibration Target coordinates for visual wizard (6-step guided procedure)
   const calibTargets = [
-    { id: "center_1", x: 50, y: 50, label: "Center" },
-    { id: "top_left", x: 15, y: 15, label: "Top-Left" },
-    { id: "top_right", x: 85, y: 15, label: "Top-Right" },
-    { id: "bottom_right", x: 85, y: 85, label: "Bottom-Right" },
-    { id: "bottom_left", x: 15, y: 85, label: "Bottom-Left" },
-    { id: "center_2", x: 50, y: 50, label: "Center Validation" },
+    { id: "center_neutral", x: 50, y: 50, label: "1. Center Neutral Resting Pose" },
+    { id: "move_left", x: 15, y: 50, label: "2. Turn/Tilt Head Left" },
+    { id: "move_right", x: 85, y: 50, label: "3. Turn/Tilt Head Right" },
+    { id: "move_up", x: 50, y: 15, label: "4. Tilt Head Upward" },
+    { id: "move_down", x: 50, y: 85, label: "5. Tilt Head Downward" },
+    { id: "validation_center", x: 50, y: 50, label: "6. Return to Center Validation" },
   ];
 
   const currentCalibTarget = calibTargets[Math.min(calibTargetIdx, calibTargets.length - 1)];
@@ -252,6 +270,38 @@ export const EyeControlScreen: React.FC = () => {
           >
             <Crosshair className="w-3.5 h-3.5" />
             <span>Center Cursor</span>
+          </Button>
+
+          {/* Floating Assistive Toolbar Toggle */}
+          <Button
+            variant={showAssistiveToolbar ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => toggleAssistiveToolbar()}
+            className={`h-9 px-3 gap-1.5 text-xs font-semibold ${
+              showAssistiveToolbar
+                ? "bg-sage text-white shadow-xs"
+                : "bg-ivory border border-black/10 hover:border-sage hover:text-sage"
+            }`}
+            title="Toggle floating assistive dwell toolbar"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>{showAssistiveToolbar ? "Hide Toolbar" : "Toolbar"}</span>
+          </Button>
+
+          {/* Virtual Keyboard Toggle */}
+          <Button
+            variant={showVirtualKeyboard ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => toggleVirtualKeyboard()}
+            className={`h-9 px-3 gap-1.5 text-xs font-semibold ${
+              showVirtualKeyboard
+                ? "bg-sage text-white shadow-xs"
+                : "bg-ivory border border-black/10 hover:border-sage hover:text-sage"
+            }`}
+            title="Toggle multilingual on-screen dwell virtual keyboard"
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+            <span>{showVirtualKeyboard ? "Hide Keyboard" : "Keyboard"}</span>
           </Button>
 
           {/* Emergency Stop Button (Esc) */}
@@ -546,16 +596,16 @@ export const EyeControlScreen: React.FC = () => {
                   <div className="text-ink font-bold">{gazeStatus?.current_pitch?.toFixed(1) ?? "0.0"}° / {gazeStatus?.current_yaw?.toFixed(1) ?? "0.0"}°</div>
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-black/5">
-                  <div className="text-ink-muted text-[10px] font-sans font-medium">Neutral Pose:</div>
-                  <div className="text-ink font-bold">{gazeStatus?.neutral_pitch?.toFixed(1) ?? "0.0"}° / {gazeStatus?.neutral_yaw?.toFixed(1) ?? "0.0"}°</div>
+                  <div className="text-ink-muted text-[10px] font-sans font-medium">Normalized (ux, uy):</div>
+                  <div className="text-ink font-bold">{gazeStatus?.normalized_ux?.toFixed(2) ?? "0.00"}, {gazeStatus?.normalized_uy?.toFixed(2) ?? "0.00"}</div>
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-black/5">
-                  <div className="text-ink-muted text-[10px] font-sans font-medium">Deflection (Δx, Δy):</div>
-                  <div className="text-ink font-bold">{gazeStatus?.deflection_x?.toFixed(2) ?? "0.00"}, {gazeStatus?.deflection_y?.toFixed(2) ?? "0.00"}</div>
+                  <div className="text-ink-muted text-[10px] font-sans font-medium">Learned Scales (Sx, Sy):</div>
+                  <div className="text-ink font-bold">{gazeStatus?.scale_x?.toFixed(2) ?? "0.12"}, {gazeStatus?.scale_y?.toFixed(2) ?? "0.10"}</div>
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-black/5">
-                  <div className="text-ink-muted text-[10px] font-sans font-medium">Rate &amp; Latency:</div>
-                  <div className="text-ink font-bold">{gazeStatus?.hz?.toFixed(0) ?? "30"} Hz ({gazeStatus?.frame_age_ms?.toFixed(0) ?? "0"} ms)</div>
+                  <div className="text-ink-muted text-[10px] font-sans font-medium">Mode &amp; Latency:</div>
+                  <div className="text-ink font-bold uppercase">{gazeStatus?.controller_mode ?? "relative"} ({gazeStatus?.hz?.toFixed(0) ?? "30"} Hz)</div>
                 </div>
               </div>
             </div>
@@ -658,19 +708,101 @@ export const EyeControlScreen: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: Tracking Strategy Selection */}
+      {/* TAB 2: Tracking Strategy & Controller Mode Selection */}
       {activeTab === "mode" && (
-        <Card className="p-5 bg-panel border-black/5 shadow-xs space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
-              <Compass className="w-4 h-4 text-sage" /> Stability-First Tracking Strategy
-            </h3>
-            <p className="text-xs text-ink-muted mt-0.5">
-              Select how facial landmarks are mapped to screen coordinates. Direct iris pupil tracking on webcams causes extreme sub-pixel jitter; this system uses head-controlled pointer movement anchored to rigid facial geometry.
-            </p>
+        <Card className="p-5 bg-panel border-black/5 shadow-xs space-y-5">
+          {/* Section 1: Controller Mode (Mode A vs Mode B) */}
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
+                <Sliders className="w-4 h-4 text-sage" /> Pointer Controller Mode (Section 5)
+              </h3>
+              <p className="text-xs text-ink-muted mt-0.5">
+                Choose between relative rate/velocity control or regularized absolute screen mapping.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              {/* Mode A: Relative Head Movement */}
+              <div
+                onClick={() => setControllerMode("relative")}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  (gazeStatus?.controller_mode ?? "relative") === "relative"
+                    ? "bg-sage/10 border-sage shadow-xs"
+                    : "bg-ivory border-black/5 hover:border-black/20"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-ink flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-sage" /> Mode A: Relative Rate (Recommended)
+                  </span>
+                  {(gazeStatus?.controller_mode ?? "relative") === "relative" && (
+                    <Badge variant="default" className="text-[10px] bg-sage text-white">Active</Badge>
+                  )}
+                </div>
+                <p className="text-ink-muted leading-relaxed">
+                  Head deflection outside the adaptive dead zone drives cursor velocity. Features 0.00 px stationary jitter inside neutral dead zone, smooth non-linear transfer curve, and seamless 1-click recentering.
+                </p>
+              </div>
+
+              {/* Mode B: Calibrated Absolute Screen Mapping */}
+              <div
+                onClick={() => setControllerMode("absolute")}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  gazeStatus?.controller_mode === "absolute"
+                    ? "bg-sage/10 border-sage shadow-xs"
+                    : "bg-ivory border-black/5 hover:border-black/20"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-ink">Mode B: Absolute Screen Mapping</span>
+                  {gazeStatus?.controller_mode === "absolute" && (
+                    <Badge variant="default" className="text-[10px] bg-sage text-white">Active</Badge>
+                  )}
+                </div>
+                <p className="text-ink-muted leading-relaxed">
+                  Regularized 2D bilinear Ridge regression maps validated head deflections directly to screen coordinates. Requires deliberate 5-point calibration; filtered by One-Euro filter.
+                </p>
+              </div>
+
+              {/* Mode C: MotionQ-blink Calibrated Iris Gaze */}
+              <div
+                onClick={() => setControllerMode("motionq_eye")}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  gazeStatus?.controller_mode === "motionq_eye"
+                    ? "bg-sage/10 border-sage shadow-xs"
+                    : "bg-ivory border-black/5 hover:border-black/20"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-ink flex items-center gap-1.5">
+                    <Eye className="w-4 h-4 text-sage" /> Mode C: MotionQ Iris Gaze
+                  </span>
+                  {gazeStatus?.controller_mode === "motionq_eye" && (
+                    <Badge variant="default" className="text-[10px] bg-sage text-white">Active</Badge>
+                  )}
+                </div>
+                <p className="text-ink-muted leading-relaxed">
+                  Direct MediaPipe iris gaze tracking (469-472, 474-477) with nonlinear 1.2 curve, dwell engine magnetic attraction, proximity slowdown, and head-tilt vertical scrolling.
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <hr className="border-black/5" />
+
+          {/* Section 2: Facial Feature Strategy */}
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
+                <Compass className="w-4 h-4 text-sage" /> Facial Feature Reference Strategy
+              </h3>
+              <p className="text-xs text-ink-muted mt-0.5">
+                Select how facial landmarks are normalized relative to the inter-eye distance and head geometry.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
             {/* Hybrid */}
             <div
               onClick={() => setTrackingMode("hybrid")}
@@ -733,7 +865,128 @@ export const EyeControlScreen: React.FC = () => {
               </p>
             </div>
           </div>
-        </Card>
+        </div>
+
+        <hr className="border-black/5" />
+
+        {/* Section 3: MotionQ Profiles & Accessible Environment */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-ink flex items-center gap-1.5">
+                <User className="w-4 h-4 text-sage" /> MotionQ Assistive Profiles &amp; Dwell Tools
+              </h3>
+              <p className="text-xs text-ink-muted mt-0.5">
+                Manage user calibration profiles, floating toolbar targets, and multilingual virtual keyboard layouts.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant={showAssistiveToolbar ? "primary" : "ghost"}
+                onClick={() => toggleAssistiveToolbar()}
+                className="text-xs h-7 px-2.5 gap-1 border border-black/10"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>{showAssistiveToolbar ? "Toolbar Active" : "Open Toolbar"}</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={showVirtualKeyboard ? "primary" : "ghost"}
+                onClick={() => toggleVirtualKeyboard()}
+                className="text-xs h-7 px-2.5 gap-1 border border-black/10"
+              >
+                <Keyboard className="w-3.5 h-3.5" />
+                <span>{showVirtualKeyboard ? "Keyboard Active" : "Open Keyboard"}</span>
+              </Button>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-ivory border border-black/10 space-y-3 text-xs">
+            {/* Active profile switch row */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-ink">Active Profile:</span>
+                <span className="font-bold text-sage bg-sage/10 px-2.5 py-1 rounded-lg border border-sage/20 uppercase tracking-wide">
+                  {motionqActiveProfile || "default"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => resetMotionQProfile(motionqActiveProfile)}
+                  className="text-xs h-7 px-2 border border-black/10 text-ink-muted hover:text-clay"
+                  title="Reset active profile to factory defaults"
+                >
+                  <RefreshCw className="w-3 h-3 mr-1" />
+                  Reset Profile
+                </Button>
+              </div>
+            </div>
+
+            {/* Profile chips */}
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-semibold text-ink-muted">Available Profiles:</span>
+              <div className="flex flex-wrap gap-2">
+                {motionqProfiles.map((p) => {
+                  const isCur = (p === motionqActiveProfile) || (!motionqActiveProfile && p === "default");
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => loadMotionQProfile(p)}
+                      className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                        isCur
+                          ? "bg-sage text-white border-sage shadow-xs"
+                          : "bg-white text-ink border-black/10 hover:border-black/20"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Create new profile input */}
+            <div className="flex items-center gap-2 pt-2 border-t border-black/5">
+              <input
+                type="text"
+                placeholder="New profile name (e.g. bedside, standing)..."
+                value={newProfileName}
+                onChange={(e) => setNewProfileName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newProfileName.trim()) {
+                    createMotionQProfile(newProfileName.trim());
+                    setNewProfileName("");
+                  }
+                }}
+                className="flex-1 bg-white border border-black/10 rounded-lg px-3 py-1.5 text-xs text-ink placeholder:text-ink-muted focus:outline-none focus:border-sage"
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!newProfileName.trim()}
+                onClick={() => {
+                  if (newProfileName.trim()) {
+                    createMotionQProfile(newProfileName.trim());
+                    setNewProfileName("");
+                  }
+                }}
+                className="text-xs h-8 px-3 gap-1 bg-white border border-black/10 font-medium"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Create
+              </Button>
+            </div>
+
+            <div className="text-[10px] text-ink-muted pt-1 flex items-center justify-between">
+              <span>Profiles persist in <code className="font-mono text-ink">~/.observer/profiles/</code> with atomic JSON healing.</span>
+              <span className="italic">Adapted from MotionQ-blink (MIT License)</span>
+            </div>
+          </div>
+        </div>
+      </Card>
       )}
 
       {/* TAB 3: Stability Presets */}

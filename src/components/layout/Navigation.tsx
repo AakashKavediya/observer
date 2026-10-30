@@ -1,29 +1,30 @@
 import React from "react";
 import {
   Activity,
-  Sliders,
   Settings,
   PlayCircle,
-  ShieldCheck,
   FileText,
   Sparkles,
   Crosshair,
+  TrendingUp,
+  ClipboardList,
+  Eye,
 } from "lucide-react";
 import { useObserverStore } from "../../store/useObserverStore";
-import { t } from "../../i18n";
 
 export const Navigation: React.FC = () => {
   const { activeScreen, setActiveScreen, consentGiven } = useObserverStore();
 
   const navItems = [
-    { id: "home", label: t("nav.home"), icon: Activity },
-    { id: "sequencer", label: "Task Sequencer", icon: Sparkles },
-    { id: "eye_control", label: "Eye Control (Track 4)", icon: Crosshair },
-    { id: "calibration", label: t("nav.calibration"), icon: Sliders },
+    { id: "home", label: "Overview", icon: Activity },
+    { id: "lab", label: "Facial & Movement Lab", icon: Eye },
+    { id: "trends", label: "Trends & Baselines", icon: TrendingUp },
     { id: "observations", label: "Observations & Reports", icon: FileText },
-    { id: "demo", label: t("nav.demo"), icon: PlayCircle },
-    { id: "settings", label: t("nav.settings"), icon: Settings },
-    { id: "privacy", label: t("nav.privacy"), icon: ShieldCheck },
+    { id: "checkins", label: "Check-ins", icon: ClipboardList },
+    { id: "sequencer", label: "Task Sequencer", icon: Sparkles },
+    { id: "eye_control", label: "Assistive Gaze", icon: Crosshair },
+    { id: "settings", label: "Settings & Privacy", icon: Settings },
+    { id: "demo", label: "Demo Mode", icon: PlayCircle },
   ] as const;
 
   if (!consentGiven) {

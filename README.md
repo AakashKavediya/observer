@@ -12,10 +12,11 @@ Built for Windows 10/11 x64 as Track 1 of **Drishti**.
 | :--- | :--- |
 | **100% Offline** | Zero network calls, zero telemetry, zero auto-update requests. Fonts (Atkinson Hyperlegible) and models are bundled inside the app. |
 | **No Image Persistence** | Frames are discarded immediately after in-memory feature extraction. No raw images, videos, or landmark vectors are written to disk or logs. |
-| **Estimates, Not Diagnoses** | Output is always framed as an estimate with confidence. No shaming language (*no "lazy", "failed", streaks, or judgment scores*). |
+| **Estimates, Not Diagnoses** | Output is always framed as an estimate with confidence. No shaming language (*no "lazy", "failed", streaks, or judgment scores*). Not a medical device. |
 | **Low Friction & Optional** | Interventions are silent by default, dismissible, never blocking, and never flash or steal focus. |
 | **Zero Screen/Input Spying** | Never reads window titles, process names, typed keys, or screen contents. OS signals are aggregate numbers only (`idle_seconds`, handle switch count). |
-| **Instant Control** | Camera can be paused instantly with one click; all stored calibration data can be permanently erased anytime. |
+| **Data Provenance Separation** | Objective biometric measurements, derived rates, algorithmic inferences, and subjective self-reports are tracked with distinct provenance tags. |
+| **Instant Control & Purge** | Camera can be paused instantly with one click; all stored observations and calibration baselines can be permanently erased anytime. |
 
 ---
 
@@ -96,15 +97,19 @@ npm test
 
 ---
 
-## Evaluator / Judge Demo Mode
+## Track 4: Hands-Free Assistive Mouse & Voice Control
 
-No webcam required to evaluate the full detection pipeline.
-1. Launch Observer.
-2. Complete the initial consent agreement.
-3. Navigate to the **Demo Mode** tab in the main navigation.
-4. Click **Restart Demo Scenario** to observe the synthetic 32-second timeline:
-   * **0s - 6s**: Relaxed Video Watching (Settled)
-   * **7s - 14s**: Active Work (Focused Flow)
-   * **15s - 21s**: Task Paralysis (Gaze lock + facial tension + idle freeze)
-   * **22s - 24s**: Gentle Tier 2 Validating Offer (*"That looks stuck. Want a tiny first step? Totally optional."*)
-   * **25s - 32s**: Recovery & Return to Settled Baseline
+Observer integrates a fully local, hands-free computer-control system for accessible desktop navigation:
+- **Mode A (Relative Rate/Velocity)**: Head deflection outside an adaptive dead zone controls cursor speed with zero stationary jitter inside the neutral dead zone.
+- **Mode B (Calibrated Absolute)**: Regularized 2D bilinear Ridge regression maps validated head deflections directly to screen coordinates.
+- **Mode C (MotionQ Iris Gaze & Dwell Control)**: Integrated from [MotionQ-blink](https://github.com/AakashKavediya/MotionQ-blink) (MIT License, Copyright (c) 2026 Aakash Kavediya). Direct iris tracking with a nonlinear 1.2 curve, dwell engine magnetic attraction, proximity slowdown, vertical head-tilt scrolling, and a multilingual virtual keyboard (English, Hindi, Marathi) with predictive completion.
+- **Hands-Free Voice Listener**: Local SpeechRecognition dispatcher for 13 assistive voice commands (`click`, `double click`, `right click`, `scroll up/down`, `pause/resume`, `keyboard`, `recenter`, `emergency stop`).
+- **macOS Native CoreGraphics Input**: Rust FFI dispatch for cursor movement, clicks, scrolling, key combinations, and Unicode text entry (`CGEventKeyboardSetUnicodeString`).
+
+---
+
+## Attribution & Licenses
+
+- **Observer Core**: Drishti Accessibility & Calm Focus Companion.
+- **MotionQ-blink**: Assistive eye-gaze control logic, multilingual predictions, and dwell engine adapted from [MotionQ-blink](https://github.com/AakashKavediya/MotionQ-blink) under the MIT License. Full license notice preserved in `engine/observer_engine/assets/LICENSE.MotionQ-blink`.
+

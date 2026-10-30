@@ -4,6 +4,9 @@ import { Header } from "./components/layout/Header";
 import { Navigation } from "./components/layout/Navigation";
 import { WelcomeConsentScreen } from "./screens/WelcomeConsentScreen";
 import { HomeScreen } from "./screens/HomeScreen";
+import { FacialMovementLabScreen } from "./screens/FacialMovementLabScreen";
+import { TrendsBaselinesScreen } from "./screens/TrendsBaselinesScreen";
+import { CheckInsScreen } from "./screens/CheckInsScreen";
 import { TaskSequencerScreen } from "./screens/TaskSequencerScreen";
 import { EyeControlScreen } from "./screens/EyeControlScreen";
 import { CalibrationScreen } from "./screens/CalibrationScreen";
@@ -12,6 +15,8 @@ import { DemoScreen } from "./screens/DemoScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { AboutPrivacyScreen } from "./screens/AboutPrivacyScreen";
 import { VisionInspector } from "./components/inspector/VisionInspector";
+import { AssistiveToolbar } from "./components/AssistiveToolbar";
+import { VirtualKeyboard } from "./components/VirtualKeyboard";
 import { EngineEvent } from "./types/ipc";
 import { listen } from "@tauri-apps/api/event";
 
@@ -86,10 +91,13 @@ export const App: React.FC = () => {
         ) : (
           <>
             {activeScreen === "home" && <HomeScreen />}
+            {activeScreen === "lab" && <FacialMovementLabScreen />}
+            {activeScreen === "trends" && <TrendsBaselinesScreen />}
+            {activeScreen === "checkins" && <CheckInsScreen />}
+            {activeScreen === "observations" && <ObservationsReportsScreen />}
             {activeScreen === "sequencer" && <TaskSequencerScreen />}
             {activeScreen === "eye_control" && <EyeControlScreen />}
             {activeScreen === "calibration" && <CalibrationScreen />}
-            {activeScreen === "observations" && <ObservationsReportsScreen />}
             {activeScreen === "demo" && <DemoScreen />}
             {activeScreen === "settings" && <SettingsScreen />}
             {activeScreen === "privacy" && <AboutPrivacyScreen />}
@@ -99,6 +107,10 @@ export const App: React.FC = () => {
 
       {/* Floating Non-Modal Vision Inspector Popup */}
       <VisionInspector />
+
+      {/* MotionQ Assistive Toolbar & Virtual Keyboard Overlays */}
+      <AssistiveToolbar />
+      <VirtualKeyboard />
     </div>
   );
 };

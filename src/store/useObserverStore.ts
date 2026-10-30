@@ -18,14 +18,17 @@ interface ObserverState {
   activeScreen:
     | "welcome"
     | "home"
+    | "lab"
+    | "trends"
+    | "observations"
+    | "checkins"
     | "sequencer"
     | "eye_control"
     | "calibration"
     | "intervention"
     | "settings"
     | "demo"
-    | "privacy"
-    | "observations";
+    | "privacy";
 
   // Vision Inspector Popup
   inspectorOpen: boolean;
@@ -67,6 +70,27 @@ interface ObserverState {
 
   // Settings
   settings: SettingsPayload;
+
+  // MotionQ Assistive Mouse Control & Virtual Keyboard State
+  showAssistiveToolbar: boolean;
+  showVirtualKeyboard: boolean;
+  keyboardLanguage: "EN" | "HI" | "MR";
+  motionqDwell: import("../types/ipc").MotionQDwellEvent | null;
+  motionqProfiles: string[];
+  motionqActiveProfile: string;
+  motionqProfileData: Record<string, unknown> | null;
+  motionqPredictions: string[];
+  motionqCalibration: import("../types/ipc").MotionQCalibrationStatusEvent | null;
+
+  // Health-Tech Physiological-Behavioral Platform State
+  htSnapshot: import("../types/ipc").HealthTechSnapshotEvent | null;
+  htCheckins: import("../types/ipc").HealthTechCheckInRecord[];
+  htObservations: import("../types/ipc").HealthTechObservationItem[];
+  htSessions: import("../types/ipc").HealthTechSessionItem[];
+  htEvents: import("../types/ipc").HealthTechEventItem[];
+  htBaseline: Record<string, unknown> | null;
+  htReport: Record<string, unknown> | null;
+  htActiveTab: "overview" | "lab" | "trends" | "observations" | "checkins" | "privacy";
 
   // Actions
   setConsentGiven: (val: boolean) => void;
@@ -135,6 +159,7 @@ interface ObserverState {
   gazeResetCalibration: () => Promise<void>;
   gazeUpdateSettings: (settings: Record<string, unknown>) => Promise<void>;
   setTrackingMode: (mode: "nose_bridge" | "head_pose" | "hybrid") => Promise<void>;
+  setControllerMode: (mode: "relative" | "absolute" | "motionq_eye") => Promise<void>;
   setStabilityPreset: (preset: "maximum_stability" | "balanced" | "responsive") => Promise<void>;
   startStabilityDiagnostic: (durationSeconds?: number) => Promise<void>;
   finishStabilityDiagnostic: () => Promise<void>;
@@ -145,6 +170,43 @@ interface ObserverState {
   nativeMouseMove: (norm_x: number, norm_y: number) => Promise<void>;
   setVoiceControlActive: (active: boolean) => void;
   dispatchVoiceCommand: (transcript: string) => import("../services/voiceControl").ExecutionResult;
+
+  // MotionQ Actions
+  toggleAssistiveToolbar: (show?: boolean) => void;
+  toggleVirtualKeyboard: (show?: boolean) => void;
+  setKeyboardLanguage: (lang: "EN" | "HI" | "MR") => Promise<void>;
+  cycleKeyboardLanguage: () => Promise<void>;
+  setMotionQClickMode: (mode: "single" | "double" | null) => Promise<void>;
+  toggleMotionQClickMode: (mode: "single" | "double") => Promise<void>;
+  registerDwellTarget: (target: Record<string, unknown>) => Promise<void>;
+  unregisterDwellTarget: (targetId: string) => Promise<void>;
+  clearDwellTargets: () => Promise<void>;
+  typeVirtualKey: (char: string) => Promise<void>;
+  sendKeyCombo: (combo: string) => Promise<void>;
+  fetchWordPredictions: (prefix: string, lang?: string) => Promise<void>;
+  loadMotionQProfile: (name: string) => Promise<void>;
+  saveMotionQProfile: (name: string, data: Record<string, unknown>) => Promise<void>;
+  fetchMotionQProfiles: () => Promise<void>;
+  createMotionQProfile: (name: string) => Promise<void>;
+  deleteMotionQProfile: (name: string) => Promise<void>;
+  resetMotionQProfile: (name?: string) => Promise<void>;
+  startMotionQCalibration: () => Promise<void>;
+  advanceMotionQCalibration: () => Promise<void>;
+  cancelMotionQCalibration: () => Promise<void>;
+
+  // Health-Tech Platform Actions
+  setHtActiveTab: (tab: ObserverState["htActiveTab"]) => void;
+  recordHtCheckin: (data: Partial<import("../types/ipc").HealthTechCheckInRecord>) => Promise<void>;
+  fetchHtCheckins: (startTs?: number, endTs?: number) => Promise<void>;
+  fetchHtObservations: (count?: number, feature?: string) => Promise<void>;
+  fetchHtSessions: () => Promise<void>;
+  fetchHtEvents: (sessionFilter?: string) => Promise<void>;
+  generateHtReport: (sessionFilter?: string, startTs?: number, endTs?: number) => Promise<void>;
+  startHtBaselineCalibration: (stage: string) => Promise<void>;
+  finishHtBaselineCalibration: () => Promise<void>;
+  resetHtBaselineCalibration: () => Promise<void>;
+  fetchHtBaseline: () => Promise<void>;
+  purgeAllHtData: () => Promise<void>;
 }
 
 // Safely attempt Tauri invoke if available
@@ -180,6 +242,27 @@ export const useObserverStore = create<ObserverState>((set, get) => ({
   accessibilityPermission: null,
   voiceControlActive: false,
   lastVoiceResult: null,
+
+  // MotionQ Initial State
+  showAssistiveToolbar: false,
+  showVirtualKeyboard: false,
+  keyboardLanguage: "EN",
+  motionqDwell: null,
+  motionqProfiles: ["default"],
+  motionqActiveProfile: "default",
+  motionqProfileData: null,
+  motionqPredictions: [],
+  motionqCalibration: null,
+
+  // Health-Tech Initial State
+  htSnapshot: null,
+  htCheckins: [],
+  htObservations: [],
+  htSessions: [],
+  htEvents: [],
+  htBaseline: null,
+  htReport: null,
+  htActiveTab: "overview",
 
   // Track 2 Sequencer initial state
   sequencerConversations: [],
@@ -331,6 +414,43 @@ export const useObserverStore = create<ObserverState>((set, get) => ({
         break;
       case "gaze_diagnostic_event":
         set({ gazeDiagnosticResult: event as import("../types/ipc").GazeDiagnosticEvent });
+        break;
+      case "motionq_dwell_event":
+        set({ motionqDwell: event as import("../types/ipc").MotionQDwellEvent });
+        break;
+      case "motionq_profile_list_event":
+        set({
+          motionqProfiles: event.profiles,
+          motionqActiveProfile: event.active_profile,
+          motionqProfileData: event.data ?? null,
+        });
+        break;
+      case "motionq_prediction_event":
+        set({ motionqPredictions: event.predictions });
+        break;
+      case "motionq_calibration_status":
+        set({ motionqCalibration: event as import("../types/ipc").MotionQCalibrationStatusEvent });
+        break;
+      case "ht_snapshot":
+        set({ htSnapshot: event as import("../types/ipc").HealthTechSnapshotEvent });
+        break;
+      case "ht_checkins_list":
+        set({ htCheckins: (event as import("../types/ipc").HealthTechCheckInListEvent).checkins });
+        break;
+      case "ht_observations_list":
+        set({ htObservations: (event as import("../types/ipc").HealthTechObservationsListEvent).observations });
+        break;
+      case "ht_sessions_list":
+        set({ htSessions: (event as import("../types/ipc").HealthTechSessionsListEvent).sessions });
+        break;
+      case "ht_events_list":
+        set({ htEvents: (event as import("../types/ipc").HealthTechEventsListEvent).events });
+        break;
+      case "ht_baseline_event":
+        set({ htBaseline: (event as import("../types/ipc").HealthTechBaselineEvent).profile });
+        break;
+      case "ht_report_event":
+        set({ htReport: (event as import("../types/ipc").HealthTechReportEvent).report });
         break;
       case "event":
         if ((event as any).name === "gaze_cursor_move") {
@@ -745,6 +865,17 @@ export const useObserverStore = create<ObserverState>((set, get) => ({
     });
   },
 
+  setControllerMode: async (mode: "relative" | "absolute" | "motionq_eye") => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "gaze_set_controller_mode",
+        controller_mode: mode,
+      },
+    });
+  },
+
   setStabilityPreset: async (preset: "maximum_stability" | "balanced" | "responsive") => {
     await safeTauriInvoke("send_engine_command", {
       command: {
@@ -830,5 +961,355 @@ export const useObserverStore = create<ObserverState>((set, get) => ({
 
     set({ lastVoiceResult: res });
     return res;
+  },
+
+  // MotionQ Assistive Toolbar & Keyboard Actions
+  toggleAssistiveToolbar: (show?: boolean) => {
+    set((s) => ({ showAssistiveToolbar: show !== undefined ? show : !s.showAssistiveToolbar }));
+  },
+
+  toggleVirtualKeyboard: (show?: boolean) => {
+    set((s) => ({ showVirtualKeyboard: show !== undefined ? show : !s.showVirtualKeyboard }));
+  },
+
+  setKeyboardLanguage: async (lang: "EN" | "HI" | "MR") => {
+    set({ keyboardLanguage: lang });
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_word_predict",
+        prefix: "",
+        language: lang,
+      },
+    });
+  },
+
+  cycleKeyboardLanguage: async () => {
+    const cur = get().keyboardLanguage;
+    const next = cur === "EN" ? "HI" : cur === "HI" ? "MR" : "EN";
+    await get().setKeyboardLanguage(next);
+  },
+
+  setMotionQClickMode: async (mode: "single" | "double" | null) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_set_click_mode",
+        click_mode: mode,
+      },
+    });
+  },
+
+  toggleMotionQClickMode: async (mode: "single" | "double") => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_toggle_click_mode",
+        click_mode: mode,
+      },
+    });
+  },
+
+  registerDwellTarget: async (target: Record<string, unknown>) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_register_target",
+        target_data: target,
+      },
+    });
+  },
+
+  unregisterDwellTarget: async (targetId: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_unregister_target",
+        target_id: targetId,
+      },
+    });
+  },
+
+  clearDwellTargets: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_clear_targets",
+      },
+    });
+  },
+
+  typeVirtualKey: async (char: string) => {
+    // Attempt native text typing first, fallback to sidecar command
+    const res = await safeTauriInvoke("native_type_text", { text: char });
+    if (!res) {
+      await safeTauriInvoke("send_engine_command", {
+        command: {
+          schema_version: SCHEMA_VERSION,
+          type: "command",
+          name: "motionq_type_text",
+          text: char,
+        },
+      });
+    }
+  },
+
+  sendKeyCombo: async (combo: string) => {
+    const res = await safeTauriInvoke("native_key_combo", { combo });
+    if (!res) {
+      await safeTauriInvoke("send_engine_command", {
+        command: {
+          schema_version: SCHEMA_VERSION,
+          type: "command",
+          name: "motionq_key_combo",
+          combo,
+        },
+      });
+    }
+  },
+
+  fetchWordPredictions: async (prefix: string, lang?: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_word_predict",
+        prefix,
+        language: lang || get().keyboardLanguage,
+      },
+    });
+  },
+
+  loadMotionQProfile: async (name: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_load_profile",
+        profile_name: name,
+      },
+    });
+  },
+
+  saveMotionQProfile: async (name: string, data: Record<string, unknown>) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_save_profile",
+        profile_name: name,
+        profile_data: data,
+      },
+    });
+  },
+
+  fetchMotionQProfiles: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_list_profiles",
+      },
+    });
+  },
+
+  createMotionQProfile: async (name: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_create_profile",
+        profile_name: name,
+      },
+    });
+  },
+
+  deleteMotionQProfile: async (name: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_delete_profile",
+        profile_name: name,
+      },
+    });
+  },
+
+  resetMotionQProfile: async (name?: string) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_reset_profile",
+        profile_name: name,
+      },
+    });
+  },
+
+  startMotionQCalibration: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_start_calibration",
+      },
+    });
+  },
+
+  advanceMotionQCalibration: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_advance_calibration",
+      },
+    });
+  },
+
+  cancelMotionQCalibration: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "motionq_cancel_calibration",
+      },
+    });
+  },
+
+  // Health-Tech Platform Actions
+  setHtActiveTab: (tab) => set({ htActiveTab: tab }),
+
+  recordHtCheckin: async (data) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_record_checkin",
+        checkin_data: data,
+      },
+    });
+  },
+
+  fetchHtCheckins: async (startTs, endTs) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_get_checkins",
+        start_ts: startTs,
+        end_ts: endTs,
+      },
+    });
+  },
+
+  fetchHtObservations: async (count = 100, feature) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_get_recent_observations",
+        observation_count: count,
+        feature_filter: feature,
+      },
+    });
+  },
+
+  fetchHtSessions: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_get_sessions",
+      },
+    });
+  },
+
+  fetchHtEvents: async (sessionFilter) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_get_events",
+        session_filter: sessionFilter,
+      },
+    });
+  },
+
+  generateHtReport: async (sessionFilter, startTs, endTs) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_generate_report",
+        session_filter: sessionFilter,
+        start_ts: startTs,
+        end_ts: endTs,
+      },
+    });
+  },
+
+  startHtBaselineCalibration: async (stage) => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_start_baseline",
+        stage,
+      },
+    });
+  },
+
+  finishHtBaselineCalibration: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_finish_baseline",
+      },
+    });
+  },
+
+  resetHtBaselineCalibration: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_reset_baseline",
+      },
+    });
+  },
+
+  fetchHtBaseline: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_get_baseline",
+      },
+    });
+  },
+
+  purgeAllHtData: async () => {
+    await safeTauriInvoke("send_engine_command", {
+      command: {
+        schema_version: SCHEMA_VERSION,
+        type: "command",
+        name: "ht_delete_all_data",
+      },
+    });
+    set({
+      htCheckins: [],
+      htObservations: [],
+      htSessions: [],
+      htEvents: [],
+      htBaseline: null,
+      htReport: null,
+    });
   },
 }));

@@ -147,15 +147,42 @@ impl SidecarManager {
                                             match serde_json::from_str::<serde_json::Value>(trimmed) {
                                                 Ok(val) => {
                                                     let event_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
-                                                    // Handle native cursor movement from gaze events directly for ultra-low latency
+                                                    // Handle native cursor movement and input from sidecar events directly for ultra-low latency
                                                     if let Some(name) = val.get("name").and_then(|n| n.as_str()) {
-                                                        if name == "gaze_cursor_move" {
-                                                            if let (Some(x), Some(y)) = (
-                                                                val.get("norm_x").and_then(|v| v.as_f64()),
-                                                                val.get("norm_y").and_then(|v| v.as_f64()),
-                                                            ) {
-                                                                let _ = mouse_for_stdout.move_cursor(x, y);
+                                                        match name {
+                                                            "gaze_cursor_move" => {
+                                                                if let (Some(x), Some(y)) = (
+                                                                    val.get("norm_x").and_then(|v| v.as_f64()),
+                                                                    val.get("norm_y").and_then(|v| v.as_f64()),
+                                                                ) {
+                                                                    let _ = mouse_for_stdout.move_cursor(x, y);
+                                                                }
                                                             }
+                                                            "gaze_cursor_click" => {
+                                                                let button = val.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+                                                                let double = val.get("double").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                                let _ = mouse_for_stdout.click(button, double);
+                                                            }
+                                                            "gaze_cursor_scroll" => {
+                                                                let delta_y = val.get("delta_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                                                                let _ = mouse_for_stdout.scroll(delta_y);
+                                                            }
+                                                            "native_type_text" => {
+                                                                if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
+                                                                    let _ = mouse_for_stdout.type_text(text);
+                                                                }
+                                                            }
+                                                            "native_key_combo" => {
+                                                                if let Some(combo) = val.get("combo").and_then(|v| v.as_str()) {
+                                                                    let _ = mouse_for_stdout.key_combo(combo);
+                                                                }
+                                                            }
+                                                            "native_key_press" => {
+                                                                if let Some(key) = val.get("key").and_then(|v| v.as_str()) {
+                                                                    let _ = mouse_for_stdout.press_key(key);
+                                                                }
+                                                            }
+                                                            _ => {}
                                                         }
                                                     }
                                                     if let Err(e) = app_clone.emit("engine://event", &val) {

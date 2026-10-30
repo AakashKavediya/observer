@@ -120,8 +120,8 @@ def test_scale_invariant_feature_extraction(temp_gaze_tracker):
     tracker.set_tracking_mode("nose_bridge")
     feat_base = tracker.extract_features(base_lms, pitch=0.0, yaw=0.0)
     assert feat_base is not None
-    # delta_x = (0.52 - 0.50) / 0.40 = 0.05
-    assert pytest.approx(feat_base[0], abs=1e-3) == 0.05
+    # raw delta_x = (0.52 - 0.50) / 0.40 = 0.05; with camera mirroring -> -0.05
+    assert pytest.approx(feat_base[0], abs=1e-3) == -0.05
 
     # 2. Scaled face: 2x zoom (inter-ocular distance = 0.80) & shifted
     zoom_lms = create_mock_landmarks(
@@ -131,22 +131,23 @@ def test_scale_invariant_feature_extraction(temp_gaze_tracker):
     )
     feat_zoom = tracker.extract_features(zoom_lms, pitch=0.0, yaw=0.0)
     assert feat_zoom is not None
-    # delta_x = (0.54 - 0.50) / 0.80 = 0.05 (IDENTICAL!)
-    assert pytest.approx(feat_zoom[0], abs=1e-3) == 0.05
+    # delta_x = -(0.54 - 0.50) / 0.80 = -0.05 (IDENTICAL!)
+    assert pytest.approx(feat_zoom[0], abs=1e-3) == -0.05
 
     # 3. Test Head Pose mode
     tracker.set_tracking_mode("head_pose")
-    feat_pose = tracker.extract_features(base_lms, pitch=-12.5, yaw=15.0)
+    feat_pose = tracker.extract_features(base_lms, pitch=-10.0, yaw=-12.5)
     assert feat_pose is not None
-    # yaw / 30.0 = 0.5, -pitch / 25.0 = 0.5
+    # -yaw / 25.0 = 0.5, pitch / 20.0 = -0.5
     assert pytest.approx(feat_pose[0], abs=1e-3) == 0.50
-    assert pytest.approx(feat_pose[1], abs=1e-3) == 0.50
+    assert pytest.approx(feat_pose[1], abs=1e-3) == -0.50
 
-    # 4. Test Hybrid mode (0.6 * nose + 0.4 * pose)
+    # 4. Test Hybrid mode (0.55 * nose + 0.45 * pose)
     tracker.set_tracking_mode("hybrid")
-    feat_hybrid = tracker.extract_features(base_lms, pitch=0.0, yaw=15.0)
+    # nose gives -0.05, pose with yaw=-12.5 gives +0.50
+    feat_hybrid = tracker.extract_features(base_lms, pitch=0.0, yaw=-12.5)
     assert feat_hybrid is not None
-    expected_x = 0.6 * 0.05 + 0.4 * 0.50  # 0.03 + 0.20 = 0.23
+    expected_x = 0.55 * (-0.05) + 0.45 * 0.50  # -0.0275 + 0.225 = 0.1975
     assert pytest.approx(feat_hybrid[0], abs=1e-3) == expected_x
 
 
@@ -578,3 +579,97 @@ def test_safety_controls_and_emergency_stop(temp_gaze_tracker):
     status = tracker.get_status()
     assert status["emergency_stopped"] is True
     assert status["enabled"] is False
+
+
+# -------------------------------------------------------------
+# 10. Mode A vs Mode B Comparison Tests (Section 5)
+# -------------------------------------------------------------
+def test_mode_a_vs_mode_b_control_modes(temp_gaze_tracker):
+    tracker = temp_gaze_tracker
+    lms = create_mock_landmarks()
+    tracker.is_neutral_calibrated = True
+    tracker.neutral_x0 = 0.0
+    tracker.neutral_y0 = 0.0
+    tracker.scale_x = 0.12
+    tracker.scale_y = 0.10
+    tracker.profile.coeff_x = [0.5, 0.4, 0.0, 0.0]
+    tracker.profile.coeff_y = [0.5, 0.0, 0.4, 0.0]
+
+    # Test Mode A: Relative Head Movement
+    tracker.set_controller_mode("relative")
+    assert tracker.controller_mode == "relative"
+    tracker.last_cursor_norm = (0.50, 0.50)
+    # Inside dead zone (yaw=0, pitch=0)
+    res_a_still = tracker.process_frame(lms, ear=0.28, pitch=0.0, yaw=0.0, timestamp=1000.0)
+    assert res_a_still["in_dead_zone"] is True
+    assert res_a_still["velocity_x"] == 0.0
+    assert res_a_still["norm_x"] == 0.50
+
+    # Outside dead zone (yaw=-5.0 -> intentional right turn)
+    res_a_move = tracker.process_frame(lms, ear=0.28, pitch=0.0, yaw=-5.0, timestamp=1000.033)
+    assert res_a_move["in_dead_zone"] is False
+    assert res_a_move["velocity_x"] > 0.0
+    assert res_a_move["norm_x"] > 0.50
+
+    # Test Mode B: Absolute Screen Mapping
+    tracker.set_controller_mode("absolute")
+    assert tracker.controller_mode == "absolute"
+    # Mode B directly maps normalized deflection to screen coordinate
+    res_b = tracker.process_frame(lms, ear=0.28, pitch=0.0, yaw=-5.0, timestamp=1000.066)
+    assert res_b["controller_mode"] == "absolute"
+    assert 0.0 <= res_b["norm_x"] <= 1.0
+    assert 0.0 <= res_b["norm_y"] <= 1.0
+
+
+# -------------------------------------------------------------
+# 11. Camera Mirroring & Diagonal Movement Independence
+# -------------------------------------------------------------
+def test_camera_mirroring_and_diagonal_movement(temp_gaze_tracker):
+    tracker = temp_gaze_tracker
+    tracker.set_controller_mode("relative")
+    tracker.apply_preset("balanced")
+    tracker.is_neutral_calibrated = True
+    tracker.neutral_x0 = 0.0
+    tracker.neutral_y0 = 0.0
+    tracker.last_cursor_norm = (0.50, 0.50)
+
+    lms = create_mock_landmarks()
+    t0 = 1000.0
+
+    # Turn head right (yaw=-6.0) and tilt up (pitch=-5.0)
+    # Mirroring rule:
+    # Turning right -> +vx (cursor moves right)
+    # Tilting up -> -vy (cursor moves up towards y=0)
+    for i in range(10):
+        res = tracker.process_frame(lms, ear=0.28, pitch=-5.0, yaw=-6.0, timestamp=t0 + i * 0.033)
+
+    assert res["velocity_x"] > 0.0  # moves right
+    assert res["velocity_y"] < 0.0  # moves up
+    assert res["norm_x"] > 0.50      # position shifted right
+    assert res["norm_y"] < 0.50      # position shifted up
+
+
+# -------------------------------------------------------------
+# 12. Acceleration Limiting Verification (Section 4)
+# -------------------------------------------------------------
+def test_acceleration_limiting_prevents_pointer_snap(temp_gaze_tracker):
+    tracker = temp_gaze_tracker
+    tracker.set_controller_mode("relative")
+    tracker.apply_preset("maximum_stability")
+    tracker.is_neutral_calibrated = True
+    tracker.neutral_x0 = 0.0
+    tracker.neutral_y0 = 0.0
+    tracker.last_cursor_norm = (0.50, 0.50)
+
+    lms = create_mock_landmarks()
+    # Initial resting frame
+    tracker.process_frame(lms, ear=0.28, pitch=0.0, yaw=0.0, timestamp=1000.0)
+
+    # Sudden violent head turn (yaw=-20.0)
+    # The acceleration limiter must clamp the velocity step: dv <= max_accel * dt
+    res1 = tracker.process_frame(lms, ear=0.28, pitch=0.0, yaw=-20.0, timestamp=1000.033)
+    dt = 0.033
+    max_allowed_dv = tracker.max_acceleration * dt + 1e-4
+
+    assert abs(res1["velocity_x"]) <= max_allowed_dv
+

@@ -338,6 +338,325 @@ impl NativeMouseController {
             Ok(())
         }
     }
+
+    /// Type arbitrary Unicode text (e.g., English words, Hindi or Marathi Devanagari script).
+    pub fn type_text(&self, text: &str) -> Result<(), String> {
+        if self.is_emergency_stopped() {
+            return Err("Text typing blocked: Emergency stop active".to_string());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            unsafe {
+                for ch in text.chars() {
+                    let mut utf16_buf = [0u16; 2];
+                    let encoded = ch.encode_utf16(&mut utf16_buf);
+
+                    let down_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), 0, true);
+                    if !down_ev.is_null() {
+                        macos_ffi::CGEventKeyboardSetUnicodeString(
+                            down_ev,
+                            encoded.len(),
+                            encoded.as_ptr(),
+                        );
+                        macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, down_ev);
+                        macos_ffi::CFRelease(down_ev);
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+
+                    let up_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), 0, false);
+                    if !up_ev.is_null() {
+                        macos_ffi::CGEventKeyboardSetUnicodeString(
+                            up_ev,
+                            encoded.len(),
+                            encoded.as_ptr(),
+                        );
+                        macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, up_ev);
+                        macos_ffi::CFRelease(up_ev);
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+            };
+
+            for ch in text.chars() {
+                let mut utf16_buf = [0u16; 2];
+                let encoded = ch.encode_utf16(&mut utf16_buf);
+
+                for &code in encoded {
+                    let down_input = INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: 0,
+                                wScan: code,
+                                dwFlags: KEYEVENTF_UNICODE,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    };
+                    let up_input = INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: 0,
+                                wScan: code,
+                                dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    };
+                    unsafe {
+                        SendInput(&[down_input], std::mem::size_of::<INPUT>() as i32);
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                        SendInput(&[up_input], std::mem::size_of::<INPUT>() as i32);
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                    }
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = text;
+            Ok(())
+        }
+    }
+
+    /// Press a special virtual key: "backspace", "enter", "space", "tab", "escape", "left", "right", "up", "down".
+    pub fn press_key(&self, key: &str) -> Result<(), String> {
+        if self.is_emergency_stopped() {
+            return Err("Key press blocked: Emergency stop active".to_string());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let vk: u16 = match key.to_lowercase().as_str() {
+                "backspace" | "back" | "delete" => 51,
+                "enter" | "return" => 36,
+                "space" => 49,
+                "tab" => 48,
+                "escape" | "esc" => 53,
+                "left" => 123,
+                "right" => 124,
+                "down" => 125,
+                "up" => 126,
+                _ => return Err(format!("Unsupported special key: {}", key)),
+            };
+
+            unsafe {
+                let down_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, true);
+                if !down_ev.is_null() {
+                    macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, down_ev);
+                    macos_ffi::CFRelease(down_ev);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                let up_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, false);
+                if !up_ev.is_null() {
+                    macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, up_ev);
+                    macos_ffi::CFRelease(up_ev);
+                }
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+                VK_BACK, VK_RETURN, VK_SPACE, VK_TAB, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
+            };
+
+            let vk = match key.to_lowercase().as_str() {
+                "backspace" | "back" | "delete" => VK_BACK.0,
+                "enter" | "return" => VK_RETURN.0,
+                "space" => VK_SPACE.0,
+                "tab" => VK_TAB.0,
+                "escape" | "esc" => VK_ESCAPE.0,
+                "left" => VK_LEFT.0,
+                "right" => VK_RIGHT.0,
+                "up" => VK_UP.0,
+                "down" => VK_DOWN.0,
+                _ => return Err(format!("Unsupported special key: {}", key)),
+            };
+
+            let down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            let up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            unsafe {
+                SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
+            }
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = key;
+            Ok(())
+        }
+    }
+
+    /// Execute a standard keyboard navigation shortcut: "tab_left", "tab_right", "browser_back".
+    pub fn key_combo(&self, combo: &str) -> Result<(), String> {
+        if self.is_emergency_stopped() {
+            return Err("Key combo blocked: Emergency stop active".to_string());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            unsafe {
+                match combo.to_lowercase().as_str() {
+                    "tab_left" => {
+                        // Cmd+Shift+[ (VK 33) or Ctrl+Shift+Tab (VK 48)
+                        let vk = 33u16; // '['
+                        let flags = macos_ffi::K_CG_EVENT_FLAG_MASK_COMMAND | macos_ffi::K_CG_EVENT_FLAG_MASK_SHIFT;
+                        let down_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, true);
+                        if !down_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(down_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, down_ev);
+                            macos_ffi::CFRelease(down_ev);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        let up_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, false);
+                        if !up_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(up_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, up_ev);
+                            macos_ffi::CFRelease(up_ev);
+                        }
+                    }
+                    "tab_right" => {
+                        // Cmd+Shift+] (VK 30)
+                        let vk = 30u16; // ']'
+                        let flags = macos_ffi::K_CG_EVENT_FLAG_MASK_COMMAND | macos_ffi::K_CG_EVENT_FLAG_MASK_SHIFT;
+                        let down_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, true);
+                        if !down_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(down_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, down_ev);
+                            macos_ffi::CFRelease(down_ev);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        let up_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, false);
+                        if !up_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(up_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, up_ev);
+                            macos_ffi::CFRelease(up_ev);
+                        }
+                    }
+                    "browser_back" | "back" => {
+                        // Cmd+[ (VK 33)
+                        let vk = 33u16; // '['
+                        let flags = macos_ffi::K_CG_EVENT_FLAG_MASK_COMMAND;
+                        let down_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, true);
+                        if !down_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(down_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, down_ev);
+                            macos_ffi::CFRelease(down_ev);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        let up_ev = macos_ffi::CGEventCreateKeyboardEvent(std::ptr::null(), vk, false);
+                        if !up_ev.is_null() {
+                            macos_ffi::CGEventSetFlags(up_ev, flags);
+                            macos_ffi::CGEventPost(macos_ffi::K_CG_HID_EVENT_TAP, up_ev);
+                            macos_ffi::CFRelease(up_ev);
+                        }
+                    }
+                    other => return Err(format!("Unsupported key combo: {}", other)),
+                }
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows equivalents: Ctrl+Shift+Tab, Ctrl+Tab, Alt+Left
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+                VK_CONTROL, VK_SHIFT, VK_TAB, VK_MENU, VK_LEFT,
+            };
+
+            let make_ki = |vk: u16, up: bool| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                        wScan: 0,
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+
+            match combo.to_lowercase().as_str() {
+                "tab_left" => {
+                    let inputs = [
+                        make_ki(VK_CONTROL.0, false),
+                        make_ki(VK_SHIFT.0, false),
+                        make_ki(VK_TAB.0, false),
+                        make_ki(VK_TAB.0, true),
+                        make_ki(VK_SHIFT.0, true),
+                        make_ki(VK_CONTROL.0, true),
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32); }
+                }
+                "tab_right" => {
+                    let inputs = [
+                        make_ki(VK_CONTROL.0, false),
+                        make_ki(VK_TAB.0, false),
+                        make_ki(VK_TAB.0, true),
+                        make_ki(VK_CONTROL.0, true),
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32); }
+                }
+                "browser_back" | "back" => {
+                    let inputs = [
+                        make_ki(VK_MENU.0, false),
+                        make_ki(VK_LEFT.0, false),
+                        make_ki(VK_LEFT.0, true),
+                        make_ki(VK_MENU.0, true),
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32); }
+                }
+                other => return Err(format!("Unsupported key combo: {}", other)),
+            }
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = combo;
+            Ok(())
+        }
+    }
 }
 
 // -------------------------------------------------------------
@@ -357,6 +676,12 @@ mod macos_ffi {
     pub const K_CG_MOUSE_BUTTON_RIGHT: u32 = 1;
     pub const K_CG_SCROLL_EVENT_UNIT_LINE: u32 = 1;
     pub const K_CG_MOUSE_EVENT_CLICK_STATE: u32 = 1;
+    pub const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 1 << 17;
+    #[allow(dead_code)]
+    pub const K_CG_EVENT_FLAG_MASK_CONTROL: u64 = 1 << 18;
+    #[allow(dead_code)]
+    pub const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 1 << 19;
+    pub const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 1 << 20;
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug)]
@@ -388,6 +713,17 @@ mod macos_ffi {
             wheel1: i32,
         ) -> *mut c_void;
         pub fn CGEventPost(tap: u32, event: *mut c_void);
+        pub fn CGEventCreateKeyboardEvent(
+            source: *const c_void,
+            virtual_key: u16,
+            key_down: bool,
+        ) -> *mut c_void;
+        pub fn CGEventKeyboardSetUnicodeString(
+            event: *mut c_void,
+            string_length: usize,
+            unicode_string: *const u16,
+        );
+        pub fn CGEventSetFlags(event: *mut c_void, flags: u64);
         pub fn CFRelease(cf: *const c_void);
         pub fn AXIsProcessTrusted() -> bool;
     }
@@ -409,6 +745,9 @@ mod tests {
         assert!(controller.move_cursor(0.5, 0.5).is_err());
         assert!(controller.click("left", false).is_err());
         assert!(controller.scroll(3).is_err());
+        assert!(controller.type_text("hello").is_err());
+        assert!(controller.press_key("space").is_err());
+        assert!(controller.key_combo("tab_left").is_err());
 
         controller.set_emergency_stop(false);
         assert_eq!(controller.is_emergency_stopped(), false);

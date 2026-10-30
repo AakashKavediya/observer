@@ -74,6 +74,9 @@ pub fn run() {
             native_mouse_move,
             native_mouse_click,
             native_mouse_scroll,
+            native_type_text,
+            native_key_press,
+            native_key_combo,
             check_accessibility_permission,
             native_mouse_emergency_stop
         ])

@@ -64,6 +64,18 @@ class GazeStatusEvent(BaseIPCModel):
     frame_age_ms: float = 0.0
     hz: float = 0.0
     is_neutral_calibrated: bool = False
+    controller_mode: Literal["relative", "absolute", "motionq_eye"] = "relative"
+    normalized_ux: float = 0.0
+    normalized_uy: float = 0.0
+    scale_x: float = 0.12
+    scale_y: float = 0.10
+    noise_mad: float = 0.002
+    dwell_progress: float = 0.0
+    dwell_target_name: Optional[str] = None
+    click_mode: Optional[str] = None
+    head_scroll_direction: Optional[str] = None
+    current_profile: str = "default"
+    keyboard_language: str = "EN"
 
 
 class GazeCalibrationEvent(BaseIPCModel):
@@ -101,6 +113,170 @@ class GazeCursorMoveEvent(BaseIPCModel):
     norm_y: float
     valid: bool
     timestamp: float
+
+
+class GazeCursorClickEvent(BaseIPCModel):
+    type: Literal["event"] = "event"
+    name: Literal["gaze_cursor_click"] = "gaze_cursor_click"
+    button: Literal["left", "right"] = "left"
+    double: bool = False
+    timestamp: float = 0.0
+
+
+class GazeCursorScrollEvent(BaseIPCModel):
+    type: Literal["event"] = "event"
+    name: Literal["gaze_cursor_scroll"] = "gaze_cursor_scroll"
+    delta_y: int
+    timestamp: float = 0.0
+
+
+class NativeTypeTextEvent(BaseIPCModel):
+    type: Literal["event"] = "event"
+    name: Literal["native_type_text"] = "native_type_text"
+    text: str
+    timestamp: float = 0.0
+
+
+class NativeKeyComboEvent(BaseIPCModel):
+    type: Literal["event"] = "event"
+    name: Literal["native_key_combo"] = "native_key_combo"
+    combo: str
+    timestamp: float = 0.0
+
+
+class NativeKeyPressEvent(BaseIPCModel):
+    type: Literal["event"] = "event"
+    name: Literal["native_key_press"] = "native_key_press"
+    key: str
+    timestamp: float = 0.0
+
+
+class MotionQDwellEvent(BaseIPCModel):
+    type: Literal["motionq_dwell_event"] = "motionq_dwell_event"
+    progress: float
+    center_x: float
+    center_y: float
+    active_target: Optional[Dict[str, Any]] = None
+    click_mode: Optional[str] = None
+    fired: bool = False
+    action: Optional[str] = None
+
+
+class MotionQProfileListEvent(BaseIPCModel):
+    type: Literal["motionq_profile_list_event"] = "motionq_profile_list_event"
+    profiles: List[str]
+    active_profile: str
+    data: Optional[Dict[str, Any]] = None
+
+
+class MotionQPredictionEvent(BaseIPCModel):
+    type: Literal["motionq_prediction_event"] = "motionq_prediction_event"
+    prefix: str
+    language: str
+    predictions: List[str]
+
+
+class MotionQCalibrationStatusEvent(BaseIPCModel):
+    type: Literal["motionq_calibration_status"] = "motionq_calibration_status"
+    stage: str
+    target_index: int
+    target_label: Optional[str] = None
+    screen_x: Optional[float] = None
+    screen_y: Optional[float] = None
+    message: Optional[str] = None
+    validation_error_px: Optional[float] = None
+    complete: bool = False
+
+
+# ---------------------------------------------------------
+# Health-Tech Physiological & Behavioral Event Models
+# ---------------------------------------------------------
+
+class HealthTechSnapshotEvent(BaseIPCModel):
+    type: Literal["ht_snapshot"] = "ht_snapshot"
+    session_id: str
+    timestamp: float
+    valid: bool
+    quality_reason: str = "optimal"
+    # Eye behavior
+    ear_left: Optional[float] = None
+    ear_right: Optional[float] = None
+    ear_avg: Optional[float] = None
+    is_blink: bool = False
+    blink_count_total: int = 0
+    blink_rate_60s: Optional[float] = None
+    ibi_median: Optional[float] = None
+    ibi_std: Optional[float] = None
+    last_closure_duration: Optional[float] = None
+    is_long_closure: bool = False
+    eye_aperture_variability_30s: Optional[float] = None
+    gaze_dispersion_30s: Optional[float] = None
+    gaze_shifts_per_min: Optional[float] = None
+    # Smile-related behavior
+    mouth_corner_elevation_left: Optional[float] = None
+    mouth_corner_elevation_right: Optional[float] = None
+    mouth_width_ratio: Optional[float] = None
+    smile_score_avg: Optional[float] = None
+    smile_asymmetry: Optional[float] = None
+    smile_duration_above_thresh_30s: Optional[float] = None
+    smile_event_count_total: int = 0
+    # Other facial movement
+    brow_elevation_left: Optional[float] = None
+    brow_elevation_right: Optional[float] = None
+    brow_asymmetry: Optional[float] = None
+    mouth_opening_ratio: Optional[float] = None
+    jaw_open_score: Optional[float] = None
+    facial_geometry_deviation: Optional[float] = None
+    # Head movement
+    pitch: Optional[float] = None
+    yaw: Optional[float] = None
+    roll: Optional[float] = None
+    angular_velocity: Optional[float] = None
+    head_movement_range_30s: Optional[float] = None
+    direction_changes_per_min: Optional[float] = None
+    low_movement_duration_s: float = 0.0
+    # Upper body modular adapter
+    upper_body_available: bool = False
+    upper_body_reason: str = "upper_body_outside_camera_frame"
+    shoulder_tilt_deg: Optional[float] = None
+    # Signal quality & session coverage
+    usable_ratio: float = 1.0
+    mean_brightness: float = 128.0
+    blur_score: float = 150.0
+    fps: float = 30.0
+    coverage_ratio: float = 1.0
+
+
+class HealthTechCheckInListEvent(BaseIPCModel):
+    type: Literal["ht_checkins_list"] = "ht_checkins_list"
+    checkins: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class HealthTechObservationsListEvent(BaseIPCModel):
+    type: Literal["ht_observations_list"] = "ht_observations_list"
+    observations: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class HealthTechSessionsListEvent(BaseIPCModel):
+    type: Literal["ht_sessions_list"] = "ht_sessions_list"
+    sessions: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class HealthTechEventsListEvent(BaseIPCModel):
+    type: Literal["ht_events_list"] = "ht_events_list"
+    events: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class HealthTechBaselineEvent(BaseIPCModel):
+    type: Literal["ht_baseline_event"] = "ht_baseline_event"
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthTechReportEvent(BaseIPCModel):
+    type: Literal["ht_report_event"] = "ht_report_event"
+    report: Dict[str, Any] = Field(default_factory=dict)
+
+
 
 
 # ---------------------------------------------------------
@@ -498,13 +674,64 @@ class CommandMessage(BaseIPCModel):
         "gaze_finish_diagnostic",
         "gaze_set_tracking_mode",
         "gaze_set_preset",
+        "gaze_set_controller_mode",
         "gaze_recenter",
         "gaze_reset_cursor",
+        # MotionQ System Commands
+        "motionq_get_status",
+        "motionq_register_target",
+        "motionq_unregister_target",
+        "motionq_clear_targets",
+        "motionq_set_click_mode",
+        "motionq_toggle_click_mode",
+        "motionq_start_calibration",
+        "motionq_advance_calibration",
+        "motionq_cancel_calibration",
+        "motionq_load_profile",
+        "motionq_save_profile",
+        "motionq_list_profiles",
+        "motionq_create_profile",
+        "motionq_delete_profile",
+        "motionq_reset_profile",
+        "motionq_set_head_scroll",
+        "motionq_word_predict",
+        "motionq_voice_command",
+        "motionq_type_text",
+        "motionq_key_combo",
+        "motionq_key_press",
+        # Health-Tech Physiological & Behavioral Commands
+        "ht_record_checkin",
+        "ht_get_checkins",
+        "ht_get_recent_observations",
+        "ht_get_sessions",
+        "ht_generate_report",
+        "ht_get_events",
+        "ht_start_baseline",
+        "ht_finish_baseline",
+        "ht_reset_baseline",
+        "ht_get_baseline",
+        "ht_delete_all_data",
     ]
     settings: Optional[SettingsPayload] = None
     gaze_settings: Optional[Dict[str, Any]] = None
     tracking_mode: Optional[str] = None
+    controller_mode: Optional[str] = None
     preset: Optional[str] = None
+    # MotionQ fields
+    click_mode: Optional[str] = None
+    profile_name: Optional[str] = None
+    profile_data: Optional[Dict[str, Any]] = None
+    target_data: Optional[Dict[str, Any]] = None
+    target_id: Optional[str] = None
+    head_scroll_enabled: Optional[bool] = None
+    head_neutral_y: Optional[float] = None
+    head_tilt_threshold: Optional[float] = None
+    prefix: Optional[str] = None
+    language: Optional[str] = None
+    transcript: Optional[str] = None
+    text: Optional[str] = None
+    combo: Optional[str] = None
+    key: Optional[str] = None
     id: Optional[str] = None
     kind: Optional[Literal["helped", "not_now", "wrong_guess", "useful", "incorrect", "uncertain"]] = None
     duration_minutes: Optional[int] = None
@@ -526,6 +753,11 @@ class CommandMessage(BaseIPCModel):
     feedback_comment: Optional[str] = None
     title: Optional[str] = None
     preferences: Optional[Dict[str, Any]] = None
+    # Health-Tech fields
+    checkin_data: Optional[Dict[str, Any]] = None
+    feature_filter: Optional[str] = None
+    observation_count: Optional[int] = None
+    session_filter: Optional[str] = None
 
 
 # ---------------------------------------------------------

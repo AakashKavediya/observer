@@ -452,7 +452,174 @@ export type EngineEvent =
   | GazeStatusEvent
   | GazeCalibrationEvent
   | GazeDiagnosticEvent
-  | GazeCursorMoveEvent;
+  | GazeCursorMoveEvent
+  | MotionQDwellEvent
+  | MotionQProfileListEvent
+  | MotionQPredictionEvent
+  | MotionQCalibrationStatusEvent
+  | HealthTechSnapshotEvent
+  | HealthTechCheckInListEvent
+  | HealthTechObservationsListEvent
+  | HealthTechSessionsListEvent
+  | HealthTechEventsListEvent
+  | HealthTechBaselineEvent
+  | HealthTechReportEvent;
+
+// ---------------------------------------------------------
+// Health-Tech Physiological & Behavioral Interfaces
+// ---------------------------------------------------------
+
+export interface HealthTechSnapshotEvent {
+  schema_version: string;
+  type: "ht_snapshot";
+  session_id: string;
+  timestamp: number;
+  valid: boolean;
+  quality_reason: string;
+  ear_left?: number | null;
+  ear_right?: number | null;
+  ear_avg?: number | null;
+  is_blink: boolean;
+  blink_count_total: number;
+  blink_rate_60s?: number | null;
+  ibi_median?: number | null;
+  ibi_std?: number | null;
+  last_closure_duration?: number | null;
+  is_long_closure: boolean;
+  eye_aperture_variability_30s?: number | null;
+  gaze_dispersion_30s?: number | null;
+  gaze_shifts_per_min?: number | null;
+  mouth_corner_elevation_left?: number | null;
+  mouth_corner_elevation_right?: number | null;
+  mouth_width_ratio?: number | null;
+  smile_score_avg?: number | null;
+  smile_asymmetry?: number | null;
+  smile_duration_above_thresh_30s?: number | null;
+  smile_event_count_total: number;
+  brow_elevation_left?: number | null;
+  brow_elevation_right?: number | null;
+  brow_asymmetry?: number | null;
+  mouth_opening_ratio?: number | null;
+  jaw_open_score?: number | null;
+  pitch?: number | null;
+  yaw?: number | null;
+  roll?: number | null;
+  angular_velocity?: number | null;
+  head_movement_range_30s?: number | null;
+  direction_changes_per_min?: number | null;
+  low_movement_duration_s: number;
+  upper_body_available: boolean;
+  upper_body_reason: string;
+  shoulder_tilt_deg?: number | null;
+  usable_ratio: number;
+  mean_brightness: number;
+  blur_score: number;
+  fps: number;
+  coverage_ratio: number;
+}
+
+export interface HealthTechCheckInRecord {
+  checkin_id: string;
+  session_id?: string | null;
+  timestamp: number;
+  energy?: number | null;
+  effort?: number | null;
+  task_difficulty?: number | null;
+  feeling_stuck?: boolean | null;
+  discomfort?: number | null;
+  stress?: number | null;
+  sleep_quality?: number | null;
+  notes?: string | null;
+  task_id?: string | null;
+  created_at_iso?: string;
+}
+
+export interface HealthTechCheckInListEvent {
+  schema_version: string;
+  type: "ht_checkins_list";
+  checkins: HealthTechCheckInRecord[];
+}
+
+export interface HealthTechObservationItem {
+  observation_id: string;
+  session_id: string;
+  timestamp: number;
+  monotonic_time: number;
+  feature_name: string;
+  measured_value?: number | null;
+  unit: string;
+  definition_version: string;
+  source_stream: string;
+  validity_status: string;
+  missing_data_reason?: string | null;
+  signal_quality?: Record<string, unknown> | null;
+  baseline_reference?: Record<string, unknown> | null;
+  algorithm_version: string;
+  provenance: string;
+}
+
+export interface HealthTechObservationsListEvent {
+  schema_version: string;
+  type: "ht_observations_list";
+  observations: HealthTechObservationItem[];
+}
+
+export interface HealthTechSessionItem {
+  session_id: string;
+  start_time: number;
+  end_time?: number | null;
+  duration_seconds: number;
+  total_frames: number;
+  valid_frames: number;
+  coverage_ratio: number;
+  active_streams: string[];
+  associated_task_id?: string | null;
+  associated_task_title?: string | null;
+  checkin_count: number;
+  event_count: number;
+  status: string;
+}
+
+export interface HealthTechSessionsListEvent {
+  schema_version: string;
+  type: "ht_sessions_list";
+  sessions: HealthTechSessionItem[];
+}
+
+export interface HealthTechEventItem {
+  event_id: string;
+  session_id: string;
+  event_type: string;
+  start_time: number;
+  end_time: number;
+  duration_seconds: number;
+  supporting_measurements: Array<{ name: string; value: unknown; threshold?: string }>;
+  feature_validity: string;
+  baseline_comparison: string;
+  rule_version: string;
+  explanation: string;
+  uncertainty: string;
+  is_user_reported: boolean;
+  created_at_iso?: string;
+}
+
+export interface HealthTechEventsListEvent {
+  schema_version: string;
+  type: "ht_events_list";
+  events: HealthTechEventItem[];
+}
+
+export interface HealthTechBaselineEvent {
+  schema_version: string;
+  type: "ht_baseline_event";
+  profile: Record<string, unknown>;
+}
+
+export interface HealthTechReportEvent {
+  schema_version: string;
+  type: "ht_report_event";
+  report: Record<string, unknown>;
+}
 
 export interface SettingsPayload {
   sensitivity?: number;
@@ -523,8 +690,30 @@ export type CommandMessage =
   | { schema_version: string; type: "command"; name: "gaze_finish_diagnostic" }
   | { schema_version: string; type: "command"; name: "gaze_set_tracking_mode"; tracking_mode: string }
   | { schema_version: string; type: "command"; name: "gaze_set_preset"; preset: string }
+  | { schema_version: string; type: "command"; name: "gaze_set_controller_mode"; controller_mode: "relative" | "absolute" | "motionq_eye" }
   | { schema_version: string; type: "command"; name: "gaze_recenter" }
-  | { schema_version: string; type: "command"; name: "gaze_reset_cursor" };
+  | { schema_version: string; type: "command"; name: "gaze_reset_cursor" }
+  | { schema_version: string; type: "command"; name: "motionq_get_status" }
+  | { schema_version: string; type: "command"; name: "motionq_register_target"; target_data: Record<string, unknown> }
+  | { schema_version: string; type: "command"; name: "motionq_unregister_target"; target_id: string }
+  | { schema_version: string; type: "command"; name: "motionq_clear_targets" }
+  | { schema_version: string; type: "command"; name: "motionq_set_click_mode"; click_mode: "single" | "double" | null }
+  | { schema_version: string; type: "command"; name: "motionq_toggle_click_mode"; click_mode: "single" | "double" }
+  | { schema_version: string; type: "command"; name: "motionq_start_calibration" }
+  | { schema_version: string; type: "command"; name: "motionq_advance_calibration" }
+  | { schema_version: string; type: "command"; name: "motionq_cancel_calibration" }
+  | { schema_version: string; type: "command"; name: "motionq_load_profile"; profile_name: string }
+  | { schema_version: string; type: "command"; name: "motionq_save_profile"; profile_name: string; profile_data: Record<string, unknown> }
+  | { schema_version: string; type: "command"; name: "motionq_list_profiles" }
+  | { schema_version: string; type: "command"; name: "motionq_create_profile"; profile_name: string }
+  | { schema_version: string; type: "command"; name: "motionq_delete_profile"; profile_name: string }
+  | { schema_version: string; type: "command"; name: "motionq_reset_profile"; profile_name?: string }
+  | { schema_version: string; type: "command"; name: "motionq_set_head_scroll"; head_scroll_enabled?: boolean; head_neutral_y?: number; head_tilt_threshold?: number }
+  | { schema_version: string; type: "command"; name: "motionq_word_predict"; prefix: string; language?: string }
+  | { schema_version: string; type: "command"; name: "motionq_voice_command"; transcript: string }
+  | { schema_version: string; type: "command"; name: "motionq_type_text"; text: string }
+  | { schema_version: string; type: "command"; name: "motionq_key_combo"; combo: string }
+  | { schema_version: string; type: "command"; name: "motionq_key_press"; key: string };
 
 export interface GazeStatusEvent {
   schema_version: string;
@@ -544,6 +733,7 @@ export interface GazeStatusEvent {
   dead_zone: number;
   max_speed: number;
   smoothing_mode: string;
+  controller_mode?: "relative" | "absolute" | "motionq_eye";
   tracking_mode: "nose_bridge" | "head_pose" | "hybrid";
   preset: "maximum_stability" | "balanced" | "responsive";
   is_calibrating: boolean;
@@ -556,12 +746,64 @@ export interface GazeStatusEvent {
   current_pitch?: number;
   deflection_x?: number;
   deflection_y?: number;
+  normalized_ux?: number;
+  normalized_uy?: number;
+  scale_x?: number;
+  scale_y?: number;
+  noise_mad?: number;
   velocity_x?: number;
   velocity_y?: number;
   in_dead_zone?: boolean;
   frame_age_ms?: number;
   hz?: number;
   is_neutral_calibrated?: boolean;
+  dwell_progress?: number;
+  dwell_target_name?: string | null;
+  click_mode?: "single" | "double" | null;
+  head_scroll_direction?: string | null;
+  current_profile?: string;
+  keyboard_language?: string;
+}
+
+export interface MotionQDwellEvent {
+  schema_version: string;
+  type: "motionq_dwell_event";
+  progress: number;
+  center_x: number;
+  center_y: number;
+  active_target?: Record<string, unknown> | null;
+  click_mode?: "single" | "double" | null;
+  fired: boolean;
+  action?: string | null;
+}
+
+export interface MotionQProfileListEvent {
+  schema_version: string;
+  type: "motionq_profile_list_event";
+  profiles: string[];
+  active_profile: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface MotionQPredictionEvent {
+  schema_version: string;
+  type: "motionq_prediction_event";
+  prefix: string;
+  language: string;
+  predictions: string[];
+}
+
+export interface MotionQCalibrationStatusEvent {
+  schema_version: string;
+  type: "motionq_calibration_status";
+  stage: string;
+  target_index: number;
+  target_label?: string | null;
+  screen_x?: number | null;
+  screen_y?: number | null;
+  message?: string | null;
+  validation_error_px?: number | null;
+  complete: boolean;
 }
 
 export interface GazeDiagnosticEvent {
